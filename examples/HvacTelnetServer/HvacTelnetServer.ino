@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
+#include <DNSServer.h>
 #include <SPIFFS.h>
 #include <ArduinoJson.h>
 
@@ -13,11 +14,11 @@
 #include <IRutils.h>
 
 // ---- User-tunable limits ----
-static const uint16_t kTelnetPort = 4998;
 static const uint8_t kMaxTelnetClients = 4;
 static const uint8_t kMaxEmitters = 8;
 static const uint8_t kMaxHvacs = 32;
 static const uint8_t kMaxCustomTemps = 16;
+static const uint16_t kDefaultTelnetPort = 4998;
 
 static const char *kConfigPath = "/config.json";
 static const char *kApSsid = "IR-HVAC-Setup";
@@ -56,6 +57,7 @@ struct WebConfig {
 struct Config {
   WifiConfig wifi;
   WebConfig web;
+  uint16_t telnetPort = kDefaultTelnetPort;
   uint16_t emitterGpios[kMaxEmitters];
   uint8_t emitterCount = 0;
   HvacConfig hvacs[kMaxHvacs];
@@ -73,9 +75,10 @@ EmitterRuntime emitters[kMaxEmitters];
 uint8_t emitterRuntimeCount = 0;
 
 WebServer web(80);
-WiFiServer telnetServer(kTelnetPort);
+WiFiServer *telnetServer = nullptr;
 WiFiClient telnetClients[kMaxTelnetClients];
 String telnetBuffers[kMaxTelnetClients];
+DNSServer dnsServer;
 
 // ---- Helpers ----
 
@@ -195,6 +198,8 @@ String configToJsonString() {
   JsonObject webc = doc["web"].to<JsonObject>();
   webc["password"] = config.web.password;
 
+  doc["telnet_port"] = config.telnetPort;
+
   JsonArray em = doc["emitters"].to<JsonArray>();
   for (uint8_t i = 0; i < config.emitterCount; i++) {
     JsonObject e = em.add<JsonObject>();
@@ -246,6 +251,7 @@ void clearConfig() {
   config.wifi.subnet = IPAddress();
   config.wifi.dns = IPAddress();
   config.web.password = "";
+  config.telnetPort = kDefaultTelnetPort;
   for (uint8_t i = 0; i < kMaxEmitters; i++) {
     config.emitterGpios[i] = 0;
   }
@@ -303,6 +309,8 @@ void loadConfig() {
   if (!webc.isNull()) {
     config.web.password = webc["password"] | "";
   }
+
+  config.telnetPort = doc["telnet_port"] | kDefaultTelnetPort;
 
   JsonArray em = doc["emitters"];
   if (!em.isNull()) {
@@ -377,9 +385,6 @@ EmitterRuntime* getEmitter(uint8_t idx) {
 String protocolOptionsHtml(const String &selected) {
   String out;
   out.reserve(2048);
-  out += "<option value='CUSTOM'";
-  if (selected == "CUSTOM") out += " selected";
-  out += ">CUSTOM</option>";
   for (uint16_t i = 0; i <= kLastDecodeType; i++) {
     decode_type_t proto = static_cast<decode_type_t>(i);
     if (!IRac::isProtocolSupported(proto)) continue;
@@ -421,7 +426,9 @@ String networkListHtml() {
   int n = WiFi.scanNetworks(false, true);
   for (int i = 0; i < n; i++) {
     String ssid = WiFi.SSID(i);
-    out += "<option value='" + htmlEscape(ssid) + "'>" + htmlEscape(ssid) + "</option>";
+    int32_t rssi = WiFi.RSSI(i);
+    out += "<option value='" + htmlEscape(ssid) + "'>" + htmlEscape(ssid) +
+           " (" + String(rssi) + " dBm)</option>";
   }
   return out;
 }
@@ -441,12 +448,15 @@ String pageHeader(const String &title) {
   html += "input,select,textarea{width:100%;padding:8px;margin:4px 0;background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:8px;}";
   html += "button{background:#22c55e;border:0;color:#0b1220;font-weight:700;padding:8px 14px;border-radius:8px;cursor:pointer;}";
   html += "button.secondary{background:#38bdf8;}";
+  html += "input:disabled{opacity:0.6;cursor:not-allowed;}";
+  html += ".row{display:flex;align-items:center;gap:8px;}";
+  html += ".row input[type='checkbox']{width:auto;margin:0;}";
   html += "table{border-collapse:collapse;width:100%;}th,td{border:1px solid #334155;padding:8px;text-align:left;}";
   html += "code,pre{background:#0b1220;border:1px solid #334155;border-radius:8px;padding:8px;display:block;white-space:pre-wrap;}";
   html += ".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;}";
   html += ".pill{display:inline-block;background:#1e293b;color:#e2e8f0;padding:2px 8px;border-radius:999px;font-size:12px;margin-left:6px;}";
   html += "</style></head><body><div class='wrap'>";
-  html += "<nav><a href='/'>Home</a><a href='/config'>Config</a><a href='/emitters'>Emitters</a><a href='/hvacs'>HVACs</a><a href='/config/upload'>Upload</a><a href='/config/download'>Download</a></nav>";
+  html += "<nav><a href='/'>Home</a><a href='/config'>Config</a><a href='/emitters'>Emitters</a><a href='/hvacs'>HVACs</a><a href='/hvacs/test'>Test HVAC</a><a href='/config/upload'>Upload</a><a href='/config/download'>Download</a></nav>";
   return html;
 }
 
@@ -458,7 +468,7 @@ void handleHome() {
   if (!checkAuth()) { requestAuth(); return; }
   String html = pageHeader("IR HVAC Telnet");
   html += "<div class='card'><h2>IR HVAC Telnet Server</h2>";
-  html += "<p>Telnet port: <strong>" + String(kTelnetPort) + "</strong></p>";
+  html += "<p>Telnet port: <strong>" + String(config.telnetPort) + "</strong></p>";
   html += "<p>WiFi mode: <strong>" + String(WiFi.isConnected() ? "STA" : "AP") + "</strong></p>";
   html += "<p>IP: <strong>" + WiFi.localIP().toString() + "</strong></p>";
   html += "<p>Emitters: <strong>" + String(config.emitterCount) + "</strong></p>";
@@ -476,22 +486,38 @@ void handleConfigPage() {
   html += "<input name='ssid' value='" + htmlEscape(config.wifi.ssid) + "'>";
   html += "<label>Select from scan</label>";
   html += "<div class='grid'><div>";
-  html += "<select name='ssid_scan'><option value=''>-- select --</option>" + networkListHtml() + "</select>";
+  html += "<select id='ssidScan' name='ssid_scan'><option value=''>-- scan to load --</option></select>";
   html += "</div><div>";
-  html += "<a class='pill' href='/config?scan=1'>Rescan</a>";
+  html += "<button class='secondary' type='button' id='scanBtn'>Scan Networks</button>";
   html += "</div></div>";
   html += "<label>WiFi Password</label>";
   html += "<input name='password' type='password' value='" + htmlEscape(config.wifi.password) + "'>";
-  html += "<label><input type='checkbox' name='dhcp'" + String(config.wifi.dhcp ? " checked" : "") + "> DHCP</label>";
+  html += "<div class='row'><input type='checkbox' id='dhcpToggle' name='dhcp'" +
+          String(config.wifi.dhcp ? " checked" : "") + "><label for='dhcpToggle'>DHCP</label></div>";
   html += "<label>Static IP</label><input name='ip' value='" + htmlEscape(config.wifi.ip.toString()) + "'>";
   html += "<label>Gateway</label><input name='gateway' value='" + htmlEscape(config.wifi.gateway.toString()) + "'>";
   html += "<label>Subnet</label><input name='subnet' value='" + htmlEscape(config.wifi.subnet.toString()) + "'>";
   html += "<label>DNS</label><input name='dns' value='" + htmlEscape(config.wifi.dns.toString()) + "'>";
+  html += "<label>Telnet Port</label>";
+  html += "<input name='telnet_port' type='number' min='1' max='65535' value='" + String(config.telnetPort) + "'>";
   html += "<h3>Web Password</h3>";
   html += "<label>Admin password (blank = no auth)</label>";
   html += "<input name='webpass' type='password' value='" + htmlEscape(config.web.password) + "'>";
   html += "<button type='submit'>Save & Reboot</button>";
   html += "</form></div>";
+  html += "<script>";
+  html += "const scanBtn=document.getElementById('scanBtn');";
+  html += "const ssidScan=document.getElementById('ssidScan');";
+  html += "const dhcpToggle=document.getElementById('dhcpToggle');";
+  html += "const ipFields=['ip','gateway','subnet','dns'].map(id=>document.querySelector(`input[name=${id}]`));";
+  html += "const updateDhcp=()=>{const disabled=dhcpToggle.checked;ipFields.forEach(f=>{f.disabled=disabled;});};";
+  html += "if(dhcpToggle){dhcpToggle.addEventListener('change',updateDhcp);updateDhcp();}";
+  html += "if(scanBtn){scanBtn.addEventListener('click',async()=>{scanBtn.disabled=true;scanBtn.textContent='Scanning...';";
+  html += "try{const res=await fetch('/api/wifi/scan');const data=await res.json();";
+  html += "ssidScan.innerHTML='<option value=\"\">-- select --</option>';data.networks.forEach(n=>{";
+  html += "const opt=document.createElement('option');opt.value=n.ssid;opt.textContent=`${n.ssid} (${n.rssi} dBm)`;ssidScan.appendChild(opt);});";
+  html += "}catch(e){alert('Scan failed');}finally{scanBtn.disabled=false;scanBtn.textContent='Scan Networks';}});}";
+  html += "</script>";
   html += pageFooter();
   web.send(200, "text/html", html);
 }
@@ -509,6 +535,9 @@ void handleConfigSave() {
   config.wifi.subnet.fromString(web.arg("subnet"));
   config.wifi.dns.fromString(web.arg("dns"));
   config.web.password = web.arg("webpass");
+  uint16_t port = web.arg("telnet_port").toInt();
+  if (port == 0) port = kDefaultTelnetPort;
+  config.telnetPort = port;
   saveConfig();
   Serial.println("web: config saved, rebooting");
   web.send(200, "text/html", "<html><body><p>Saved. Rebooting...</p></body></html>");
@@ -528,8 +557,8 @@ void handleEmittersPage() {
   html += "</table>";
   html += "<h3>Add Emitters</h3>";
   html += "<form method='POST' action='/emitters/add'>";
-  html += "<label>GPIO selection (multi-select)</label>";
-  html += "<select name='gpios' multiple size='8'>";
+  html += "<label>GPIO selection</label>";
+  html += "<select name='gpios'>";
   html += "<option value='2'>GPIO 2</option>";
   html += "<option value='4'>GPIO 4</option>";
   html += "<option value='5'>GPIO 5</option>";
@@ -550,7 +579,6 @@ void handleEmittersPage() {
   html += "<option value='32'>GPIO 32</option>";
   html += "<option value='33'>GPIO 33</option>";
   html += "</select>";
-  html += "<small class='pill'>Ctrl/Shift for multi-select</small>";
   html += "<button type='submit'>Add</button></form></div>";
   html += pageFooter();
   web.send(200, "text/html", html);
@@ -616,50 +644,12 @@ void handleHvacsPage() {
   } else {
     html += "<h3>Add HVAC</h3>";
     html += "<form method='POST' action='/hvacs/add'>";
-    html += "<label>ID</label><input value='auto' disabled>";
-    html += "<small class='pill'>auto 1-99</small>";
     html += "<label>Protocol</label><select name='protocol'>" + protocolOptionsHtml("") + "</select>";
     html += "<label>Emitter</label><select name='emitter'>" + emitterOptionsHtml(0) + "</select>";
     html += "<label>Model (optional)</label><input name='model' value='-1'>";
-    html += "<h4>Custom Protocol Fields (only for CUSTOM)</h4>";
-    html += "<label>Encoding</label><select name='custom_encoding'><option value='pronto'>pronto</option><option value='gc'>gc</option></select>";
-    html += "<label>OFF code</label><textarea name='custom_off'></textarea>";
-    html += "<label>Temperature codes JSON (e.g. {\"18\":\"0000,...\",\"19\":\"0000,...\"})</label>";
-    html += "<textarea name='custom_temps'></textarea>";
     html += "<button type='submit'>Add</button></form>";
   }
   html += "</div>";
-
-  html += "<div class='card'><h3>Test HVAC</h3>";
-  if (config.hvacCount == 0) {
-    html += "<p>No HVACs registered.</p>";
-  } else {
-    html += "<form id='testForm' method='POST' action='/hvacs/test'>";
-    html += "<div class='grid'>";
-    html += "<div><label>HVAC</label><select name='id'>";
-    for (uint8_t i = 0; i < config.hvacCount; i++) {
-      html += "<option value='" + htmlEscape(config.hvacs[i].id) + "'>" + htmlEscape(config.hvacs[i].id) + " (" + htmlEscape(config.hvacs[i].protocol) + ")</option>";
-    }
-    html += "</select></div>";
-    html += "<div><label>Power</label><select name='power'><option value='on'>on</option><option value='off'>off</option></select></div>";
-    html += "<div><label>Mode</label><select name='mode'><option>auto</option><option>cool</option><option>heat</option><option>dry</option><option>fan</option></select></div>";
-    html += "<div><label>Temp (C)</label><input name='temp' value='24'></div>";
-    html += "<div><label>Fan</label><select name='fan'><option>auto</option><option>low</option><option>medium</option><option>high</option></select></div>";
-    html += "<div><label>Swing V</label><select name='swingv'><option>off</option><option>auto</option><option>low</option><option>middle</option><option>high</option></select></div>";
-    html += "<div><label>Swing H</label><select name='swingh'><option>off</option><option>auto</option><option>left</option><option>middle</option><option>right</option></select></div>";
-    html += "<div><label>Encoding (custom)</label><select name='encoding'><option value=''>default</option><option value='pronto'>pronto</option><option value='gc'>gc</option></select></div>";
-    html += "<div><label>Custom code (optional)</label><input name='code' placeholder='pronto/gc code'></div>";
-    html += "</div>";
-    html += "<button type='submit'>Send Test</button></form>";
-  }
-  html += "<h4>Generated JSON</h4><pre id='jsonPreview'>{}</pre>";
-  html += "<script>";
-  html += "const form=document.getElementById('testForm');";
-  html += "if(form){const preview=document.getElementById('jsonPreview');";
-  html += "const update=()=>{const data={cmd:'send'};const fd=new FormData(form);";
-  html += "for(const [k,v] of fd.entries()){if(v==='')continue;data[k]=v;}preview.textContent=JSON.stringify(data,null,2);};";
-  html += "form.addEventListener('input',update);update();}";
-  html += "</script></div>";
 
   html += pageFooter();
   web.send(200, "text/html", html);
@@ -685,23 +675,6 @@ void handleHvacsAdd() {
   h.protocol = web.arg("protocol");
   h.emitterIndex = web.arg("emitter").toInt();
   h.model = web.arg("model").toInt();
-  if (h.protocol == "CUSTOM") {
-    h.isCustom = true;
-    h.customEncoding = web.arg("custom_encoding");
-    h.customOff = web.arg("custom_off");
-    String tempsJson = web.arg("custom_temps");
-    if (tempsJson.length()) {
-      JsonDocument doc;
-      if (deserializeJson(doc, tempsJson) == DeserializationError::Ok) {
-        for (JsonPair kv : doc.as<JsonObject>()) {
-          if (h.customTempCount >= kMaxCustomTemps) break;
-          h.customTemps[h.customTempCount].tempC = atoi(kv.key().c_str());
-          h.customTemps[h.customTempCount].code = kv.value().as<String>();
-          h.customTempCount++;
-        }
-      }
-    }
-  }
   saveConfig();
   Serial.print("web: hvac added id=");
   Serial.println(id);
@@ -725,6 +698,64 @@ void handleHvacsDelete() {
   Serial.println(idx);
   web.sendHeader("Location", "/hvacs");
   web.send(302, "text/plain", "");
+}
+
+void handleHvacTestPage() {
+  if (!checkAuth()) { requestAuth(); return; }
+  String html = pageHeader("HVAC Test");
+  html += "<div class='card'><h2>Test HVAC</h2>";
+  if (config.hvacCount == 0) {
+    html += "<p>No HVACs registered.</p>";
+  } else {
+    html += "<form id='testForm'>";
+    html += "<div class='grid'>";
+    html += "<div><label>HVAC</label><select name='id'>";
+    for (uint8_t i = 0; i < config.hvacCount; i++) {
+      html += "<option value='" + htmlEscape(config.hvacs[i].id) + "'>" + htmlEscape(config.hvacs[i].id) +
+              " (" + htmlEscape(config.hvacs[i].protocol) + ")</option>";
+    }
+    html += "</select></div>";
+    html += "<div><label>Power</label><select name='power'><option value='on'>on</option><option value='off'>off</option></select></div>";
+    html += "<div><label>Mode</label><select name='mode'><option>auto</option><option>cool</option><option>heat</option><option>dry</option><option>fan</option></select></div>";
+    html += "<div><label>Temp (C)</label><input name='temp' value='24'></div>";
+    html += "<div><label>Fan</label><select name='fan'><option>auto</option><option>low</option><option>medium</option><option>high</option></select></div>";
+    html += "<div><label>Swing V</label><select name='swingv'><option>off</option><option>auto</option><option>low</option><option>middle</option><option>high</option></select></div>";
+    html += "<div><label>Swing H</label><select name='swingh'><option>off</option><option>auto</option><option>left</option><option>middle</option><option>right</option></select></div>";
+    html += "<div><label>Encoding (custom)</label><select name='encoding'><option value=''>default</option><option value='pronto'>pronto</option><option value='gc'>gc</option></select></div>";
+    html += "<div><label>Custom code (optional)</label><input name='code' placeholder='pronto/gc code'></div>";
+    html += "</div>";
+    html += "<button type='submit'>Send Test</button></form>";
+  }
+  html += "<h4>Generated JSON</h4><pre id='jsonPreview'>{}</pre>";
+  html += "<h4>Response</h4><pre id='jsonResponse'>-</pre></div>";
+  html += "<div class='card'><h3>Send Raw Code</h3>";
+  html += "<form id='rawForm'>";
+  html += "<div class='grid'>";
+  html += "<div><label>Emitter</label><select name='emitter'>" + emitterOptionsHtml(0) + "</select></div>";
+  html += "<div><label>Encoding</label><select name='encoding'><option value='pronto'>pronto</option><option value='gc'>gc</option></select></div>";
+  html += "<div><label>Code</label><input name='code' placeholder='0000,0067,...'></div>";
+  html += "</div>";
+  html += "<button type='submit'>Send Raw</button></form>";
+  html += "<h4>Raw Response</h4><pre id='rawResponse'>-</pre></div>";
+  html += "<script>";
+  html += "const form=document.getElementById('testForm');";
+  html += "const preview=document.getElementById('jsonPreview');";
+  html += "const response=document.getElementById('jsonResponse');";
+  html += "const update=()=>{if(!form)return;const data={cmd:'send'};const fd=new FormData(form);";
+  html += "for(const [k,v] of fd.entries()){if(v==='')continue;data[k]=v;}preview.textContent=JSON.stringify(data,null,2);};";
+  html += "if(form){form.addEventListener('input',update);update();";
+  html += "form.addEventListener('submit',async(e)=>{e.preventDefault();response.textContent='Sending...';";
+  html += "const fd=new FormData(form);const params=new URLSearchParams(fd);";
+  html += "const res=await fetch('/hvacs/test',{method:'POST',body:params});";
+  html += "const data=await res.json();response.textContent=JSON.stringify(data,null,2);});}";
+  html += "const rawForm=document.getElementById('rawForm');const rawResponse=document.getElementById('rawResponse');";
+  html += "if(rawForm){rawForm.addEventListener('submit',async(e)=>{e.preventDefault();rawResponse.textContent='Sending...';";
+  html += "const fd=new FormData(rawForm);const params=new URLSearchParams(fd);";
+  html += "const res=await fetch('/raw/test',{method:'POST',body:params});";
+  html += "const data=await res.json();rawResponse.textContent=JSON.stringify(data,null,2);});}";
+  html += "</script>";
+  html += pageFooter();
+  web.send(200, "text/html", html);
 }
 
 void handleConfigDownload() {
@@ -778,6 +809,23 @@ void handleApiConfig() {
   if (!checkAuth()) { requestAuth(); return; }
   String json = configToJsonString();
   web.send(200, "application/json", json);
+}
+
+void handleWifiScan() {
+  if (!checkAuth()) { requestAuth(); return; }
+  JsonDocument doc;
+  JsonArray networks = doc["networks"].to<JsonArray>();
+  WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
+  WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
+  int n = WiFi.scanNetworks(false, true);
+  for (int i = 0; i < n; i++) {
+    JsonObject o = networks.add<JsonObject>();
+    o["ssid"] = WiFi.SSID(i);
+    o["rssi"] = WiFi.RSSI(i);
+  }
+  String out;
+  serializeJson(doc, out);
+  web.send(200, "application/json", out);
 }
 
 bool processCommand(JsonDocument &doc, JsonDocument &resp) {
@@ -918,19 +966,23 @@ void handleHvacTest() {
 
   JsonDocument resp;
   processCommand(cmd, resp);
-
-  String reqStr;
   String respStr;
-  serializeJsonPretty(cmd, reqStr);
-  serializeJsonPretty(resp, respStr);
+  serializeJson(resp, respStr);
+  web.send(200, "application/json", respStr);
+}
 
-  String html = pageHeader("HVAC Test");
-  html += "<div class='card'><h2>Test Result</h2>";
-  html += "<h4>Request JSON</h4><pre>" + htmlEscape(reqStr) + "</pre>";
-  html += "<h4>Response JSON</h4><pre>" + htmlEscape(respStr) + "</pre>";
-  html += "<a href='/hvacs'>Back</a></div>";
-  html += pageFooter();
-  web.send(200, "text/html", html);
+void handleRawTest() {
+  if (!checkAuth()) { requestAuth(); return; }
+  JsonDocument cmd;
+  cmd["cmd"] = "raw";
+  cmd["emitter"] = web.arg("emitter").toInt();
+  if (web.arg("encoding").length()) cmd["encoding"] = web.arg("encoding");
+  cmd["code"] = web.arg("code");
+  JsonDocument resp;
+  processCommand(cmd, resp);
+  String respStr;
+  serializeJson(resp, respStr);
+  web.send(200, "application/json", respStr);
 }
 
 void setupWeb() {
@@ -942,12 +994,19 @@ void setupWeb() {
   web.on("/emitters/delete", HTTP_GET, handleEmittersDelete);
   web.on("/hvacs", handleHvacsPage);
   web.on("/hvacs/add", HTTP_POST, handleHvacsAdd);
+  web.on("/hvacs/test", HTTP_GET, handleHvacTestPage);
   web.on("/hvacs/test", HTTP_POST, handleHvacTest);
   web.on("/hvacs/delete", HTTP_GET, handleHvacsDelete);
+  web.on("/raw/test", HTTP_POST, handleRawTest);
   web.on("/config/download", HTTP_GET, handleConfigDownload);
   web.on("/config/upload", HTTP_GET, handleConfigUploadPage);
   web.on("/config/upload", HTTP_POST, handleConfigUploadDone, handleConfigUpload);
   web.on("/api/config", HTTP_GET, handleApiConfig);
+  web.on("/api/wifi/scan", HTTP_GET, handleWifiScan);
+  web.onNotFound([]() {
+    web.sendHeader("Location", "/");
+    web.send(302, "text/plain", "");
+  });
   web.begin();
 }
 
@@ -999,7 +1058,8 @@ void handleTelnetLine(WiFiClient &client, const String &line) {
 }
 
 void handleTelnet() {
-  WiFiClient incoming = telnetServer.available();
+  if (!telnetServer) return;
+  WiFiClient incoming = telnetServer->available();
   if (incoming) {
     bool assigned = false;
     for (uint8_t i = 0; i < kMaxTelnetClients; i++) {
@@ -1051,8 +1111,10 @@ void startWifi() {
     Serial.println(kApSsid);
     Serial.print("wifi: AP IP=");
     Serial.println(WiFi.softAPIP());
+    dnsServer.start(53, "*", WiFi.softAPIP());
     return;
   }
+  dnsServer.stop();
   WiFi.mode(WIFI_STA);
   if (!config.wifi.dhcp) {
     WiFi.config(config.wifi.ip, config.wifi.gateway, config.wifi.subnet, config.wifi.dns);
@@ -1091,13 +1153,19 @@ void setup() {
   rebuildEmitters();
   startWifi();
   setupWeb();
-  telnetServer.begin();
-  telnetServer.setNoDelay(true);
+  if (telnetServer) {
+    delete telnetServer;
+    telnetServer = nullptr;
+  }
+  telnetServer = new WiFiServer(config.telnetPort);
+  telnetServer->begin();
+  telnetServer->setNoDelay(true);
   Serial.print("telnet: listening on ");
-  Serial.println(kTelnetPort);
+  Serial.println(config.telnetPort);
 }
 
 void loop() {
   web.handleClient();
   handleTelnet();
+  dnsServer.processNextRequest();
 }
