@@ -30,7 +30,12 @@ Send custom HVAC (uses stored temp map or off code):
 
 Raw ad-hoc Pronto/GC:
 ```
-{"cmd":"raw","emitter":0,"encoding":"pronto","code":"0000,0067,0000,0015,..."}
+{"cmd":"raw","emitter":0,"encoding":"pronto","code":"0000 006D 0000 0022 ..."}
+{"cmd":"raw","emitter":0,"encoding":"gc","code":"sendir,1:1,1,38000,1,1,172,172,22,64,..."}
+
+## Accessing the device
+- Default hostname (mDNS): `ir-server.local`
+- Default setup AP: `IR-HVAC-Setup` (browse to `http://192.168.4.1/` on first boot)
 ```
 
 All responses are JSON like:

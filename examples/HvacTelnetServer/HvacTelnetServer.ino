@@ -5,6 +5,7 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <DNSServer.h>
+#include <ESPmDNS.h>
 #include <SPIFFS.h>
 #include <ArduinoJson.h>
 
@@ -22,6 +23,7 @@ static const uint16_t kDefaultTelnetPort = 4998;
 
 static const char *kConfigPath = "/config.json";
 static const char *kApSsid = "IR-HVAC-Setup";
+static const char *kDefaultHostname = "ir-server";
 
 struct CustomTempCode {
   int tempC;
@@ -57,6 +59,7 @@ struct WebConfig {
 struct Config {
   WifiConfig wifi;
   WebConfig web;
+  String hostname;
   uint16_t telnetPort = kDefaultTelnetPort;
   uint16_t emitterGpios[kMaxEmitters];
   uint8_t emitterCount = 0;
@@ -121,6 +124,37 @@ uint16_t countValuesInStr(const String str, char sep) {
   return count;
 }
 
+bool isTokenSep(char c) {
+  return c == ',' || c == ';' || c == ' ' || c == '\t';
+}
+
+uint16_t countTokensFlexible(const String &str) {
+  uint16_t count = 0;
+  bool in_token = false;
+  for (size_t i = 0; i < str.length(); i++) {
+    if (isTokenSep(str[i])) {
+      if (in_token) {
+        count++;
+        in_token = false;
+      }
+    } else {
+      in_token = true;
+    }
+  }
+  if (in_token) count++;
+  return count;
+}
+
+bool nextTokenFlexible(const String &str, size_t &pos, String &token) {
+  const size_t len = str.length();
+  while (pos < len && isTokenSep(str[pos])) pos++;
+  if (pos >= len) return false;
+  size_t start = pos;
+  while (pos < len && !isTokenSep(str[pos])) pos++;
+  token = str.substring(start, pos);
+  return true;
+}
+
 uint16_t *newCodeArray(const uint16_t size) {
   uint16_t *result = reinterpret_cast<uint16_t*>(malloc(size * sizeof(uint16_t)));
   return result;
@@ -129,22 +163,22 @@ uint16_t *newCodeArray(const uint16_t size) {
 bool parseStringAndSendGC(IRsend *irsend, const String str) {
 #if SEND_GLOBALCACHE
   String tmp_str = str;
-  if (str.startsWith(PSTR("1:1,1,"))) tmp_str = str.substring(6);
-  uint16_t count = countValuesInStr(tmp_str, ',');
+  tmp_str.trim();
+  // Allow full GlobalCache strings like "sendir,1:1,1,...."
+  if (tmp_str.startsWith(PSTR("sendir,"))) tmp_str = tmp_str.substring(7);
+  if (tmp_str.startsWith(PSTR("1:1,1,"))) tmp_str = tmp_str.substring(6);
+  uint16_t count = countTokensFlexible(tmp_str);
   uint16_t *code_array = newCodeArray(count);
   if (!code_array) return false;
-  count = 0;
-  uint16_t start_from = 0;
-  int16_t index = -1;
-  do {
-    index = tmp_str.indexOf(',', start_from);
-    code_array[count] = tmp_str.substring(start_from, index).toInt();
-    start_from = index + 1;
-    count++;
-  } while (index != -1);
-  irsend->sendGC(code_array, count);
+  uint16_t filled = 0;
+  size_t pos = 0;
+  String token;
+  while (nextTokenFlexible(tmp_str, pos, token) && filled < count) {
+    code_array[filled++] = token.toInt();
+  }
+  irsend->sendGC(code_array, filled);
   free(code_array);
-  return count > 0;
+  return filled > 0;
 #else
   (void)irsend;
   (void)str;
@@ -154,28 +188,36 @@ bool parseStringAndSendGC(IRsend *irsend, const String str) {
 
 bool parseStringAndSendPronto(IRsend *irsend, const String str, uint16_t repeats) {
 #if SEND_PRONTO
-  uint16_t count = countValuesInStr(str, ',');
-  int16_t index = -1;
-  uint16_t start_from = 0;
-  if (str.startsWith("R") || str.startsWith("r")) {
-    index = str.indexOf(',', start_from);
-    repeats = str.substring(start_from + 1, index).toInt();
-    start_from = index + 1;
-    count--;
+  String tmp_str = str;
+  tmp_str.trim();
+
+  // Allow either comma- or space-separated Pronto codes.
+  uint16_t count = countTokensFlexible(tmp_str);
+  size_t pos = 0;
+  String token;
+
+  // Optional repeat prefix e.g. "R3 ..."
+  if (nextTokenFlexible(tmp_str, pos, token)) {
+    if (token.length() > 1 && (token[0] == 'R' || token[0] == 'r')) {
+      repeats = token.substring(1).toInt();
+      count--;  // Skip repeat token from payload count.
+    } else {
+      // Rewind to start of first code token.
+      pos = 0;
+    }
   }
+
   if (count < kProntoMinLength) return false;
   uint16_t *code_array = newCodeArray(count);
   if (!code_array) return false;
-  count = 0;
-  do {
-    index = str.indexOf(',', start_from);
-    code_array[count] = strtoul(str.substring(start_from, index).c_str(), NULL, 16);
-    start_from = index + 1;
-    count++;
-  } while (index != -1);
-  irsend->sendPronto(code_array, count, repeats);
+  uint16_t filled = 0;
+  // If we consumed a repeat token above, pos already points to next token.
+  while (nextTokenFlexible(tmp_str, pos, token) && filled < count) {
+    code_array[filled++] = strtoul(token.c_str(), NULL, 16);
+  }
+  irsend->sendPronto(code_array, filled, repeats);
   free(code_array);
-  return count > 0;
+  return filled > 0;
 #else
   (void)irsend;
   (void)str;
@@ -198,6 +240,7 @@ String configToJsonString() {
   JsonObject webc = doc["web"].to<JsonObject>();
   webc["password"] = config.web.password;
 
+  doc["hostname"] = config.hostname.length() ? config.hostname : kDefaultHostname;
   doc["telnet_port"] = config.telnetPort;
 
   JsonArray em = doc["emitters"].to<JsonArray>();
@@ -251,6 +294,7 @@ void clearConfig() {
   config.wifi.subnet = IPAddress();
   config.wifi.dns = IPAddress();
   config.web.password = "";
+  config.hostname = kDefaultHostname;
   config.telnetPort = kDefaultTelnetPort;
   for (uint8_t i = 0; i < kMaxEmitters; i++) {
     config.emitterGpios[i] = 0;
@@ -309,6 +353,8 @@ void loadConfig() {
   if (!webc.isNull()) {
     config.web.password = webc["password"] | "";
   }
+
+  config.hostname = doc["hostname"] | kDefaultHostname;
 
   config.telnetPort = doc["telnet_port"] | kDefaultTelnetPort;
 
@@ -471,6 +517,7 @@ void handleHome() {
   html += "<p>Telnet port: <strong>" + String(config.telnetPort) + "</strong></p>";
   html += "<p>WiFi mode: <strong>" + String(WiFi.isConnected() ? "STA" : "AP") + "</strong></p>";
   html += "<p>IP: <strong>" + WiFi.localIP().toString() + "</strong></p>";
+  html += "<p>Hostname: <strong>" + htmlEscape(config.hostname.length() ? config.hostname : kDefaultHostname) + ".local</strong></p>";
   html += "<p>Emitters: <strong>" + String(config.emitterCount) + "</strong></p>";
   html += "<p>HVACs: <strong>" + String(config.hvacCount) + "</strong></p></div>";
   html += pageFooter();
@@ -498,6 +545,9 @@ void handleConfigPage() {
   html += "<label>Gateway</label><input name='gateway' value='" + htmlEscape(config.wifi.gateway.toString()) + "'>";
   html += "<label>Subnet</label><input name='subnet' value='" + htmlEscape(config.wifi.subnet.toString()) + "'>";
   html += "<label>DNS</label><input name='dns' value='" + htmlEscape(config.wifi.dns.toString()) + "'>";
+  html += "<label>Hostname (mDNS .local)</label>";
+  html += "<input name='hostname' maxlength='32' value='" +
+          htmlEscape(config.hostname.length() ? config.hostname : kDefaultHostname) + "'>";
   html += "<label>Telnet Port</label>";
   html += "<input name='telnet_port' type='number' min='1' max='65535' value='" + String(config.telnetPort) + "'>";
   html += "<h3>Web Password</h3>";
@@ -535,6 +585,10 @@ void handleConfigSave() {
   config.wifi.subnet.fromString(web.arg("subnet"));
   config.wifi.dns.fromString(web.arg("dns"));
   config.web.password = web.arg("webpass");
+  String hostname = web.arg("hostname");
+  hostname.trim();
+  if (hostname.length() == 0) hostname = kDefaultHostname;
+  config.hostname = hostname;
   uint16_t port = web.arg("telnet_port").toInt();
   if (port == 0) port = kDefaultTelnetPort;
   config.telnetPort = port;
@@ -841,7 +895,8 @@ bool processCommand(JsonDocument &doc, JsonDocument &resp) {
     JsonArray examples = help["examples"].to<JsonArray>();
     examples.add("{\"cmd\":\"list\"}");
     examples.add("{\"cmd\":\"send\",\"id\":\"1\",\"power\":\"on\",\"mode\":\"cool\",\"temp\":24,\"fan\":\"auto\"}");
-    examples.add("{\"cmd\":\"raw\",\"emitter\":0,\"encoding\":\"pronto\",\"code\":\"0000,0067,...\"}");
+    examples.add("{\"cmd\":\"raw\",\"emitter\":0,\"encoding\":\"pronto\",\"code\":\"0000 006D 0000 ...\"}");
+    examples.add("{\"cmd\":\"raw\",\"emitter\":0,\"encoding\":\"gc\",\"code\":\"sendir,1:1,1,38000,1,1,172,172,...\"}");
     return true;
   }
 
@@ -985,6 +1040,13 @@ void handleRawTest() {
   web.send(200, "application/json", respStr);
 }
 
+// Captive-portal probes (Android/iOS/Windows) create noisy 404 logs; respond quietly.
+void handleCaptive204() { web.send(204); }
+void handleCaptiveRedirect() {
+  web.sendHeader("Location", "/");
+  web.send(302, "text/plain", "");
+}
+
 void setupWeb() {
   web.on("/", handleHome);
   web.on("/config", handleConfigPage);
@@ -998,6 +1060,16 @@ void setupWeb() {
   web.on("/hvacs/test", HTTP_POST, handleHvacTest);
   web.on("/hvacs/delete", HTTP_GET, handleHvacsDelete);
   web.on("/raw/test", HTTP_POST, handleRawTest);
+
+  // Captive portal & connectivity check endpoints.
+  web.on("/generate_204", HTTP_ANY, handleCaptive204);
+  web.on("/gen_204", HTTP_ANY, handleCaptive204);
+  web.on("/hotspot-detect.html", HTTP_ANY, handleCaptiveRedirect);
+  web.on("/fwlink", HTTP_ANY, handleCaptiveRedirect);
+  web.on("/connecttest.txt", HTTP_ANY, handleCaptiveRedirect);
+  web.on("/ncsi.txt", HTTP_ANY, handleCaptiveRedirect);
+  web.on("/library/test/success.html", HTTP_ANY, handleCaptiveRedirect);
+
   web.on("/config/download", HTTP_GET, handleConfigDownload);
   web.on("/config/upload", HTTP_GET, handleConfigUploadPage);
   web.on("/config/upload", HTTP_POST, handleConfigUploadDone, handleConfigUpload);
@@ -1103,19 +1175,36 @@ void handleTelnet() {
   }
 }
 
+void startMdns() {
+#if ARDUINO_ARCH_ESP32
+  const char *host = (config.hostname.length() ? config.hostname.c_str() : kDefaultHostname);
+  if (!MDNS.begin(host)) {
+    Serial.println("mdns: start failed");
+    return;
+  }
+  MDNS.addService("http", "tcp", 80);
+  Serial.print("mdns: responding for ");
+  Serial.print(host);
+  Serial.println(".local");
+#endif
+}
+
 void startWifi() {
   if (config.wifi.ssid.length() == 0) {
     WiFi.mode(WIFI_AP);
     WiFi.softAP(kApSsid);
+    WiFi.softAPsetHostname(config.hostname.length() ? config.hostname.c_str() : kDefaultHostname);
     Serial.print("wifi: AP mode SSID=");
     Serial.println(kApSsid);
     Serial.print("wifi: AP IP=");
     Serial.println(WiFi.softAPIP());
     dnsServer.start(53, "*", WiFi.softAPIP());
+    startMdns();
     return;
   }
   dnsServer.stop();
   WiFi.mode(WIFI_STA);
+  WiFi.setHostname(config.hostname.length() ? config.hostname.c_str() : kDefaultHostname);
   if (!config.wifi.dhcp) {
     WiFi.config(config.wifi.ip, config.wifi.gateway, config.wifi.subnet, config.wifi.dns);
   }
@@ -1129,12 +1218,14 @@ void startWifi() {
   if (WiFi.status() != WL_CONNECTED) {
     WiFi.mode(WIFI_AP);
     WiFi.softAP(kApSsid);
+    WiFi.softAPsetHostname(kDefaultHostname);
     Serial.println("wifi: connect failed, fallback to AP");
     Serial.print("wifi: AP IP=");
     Serial.println(WiFi.softAPIP());
   } else {
     Serial.print("wifi: connected IP=");
     Serial.println(WiFi.localIP());
+    startMdns();
   }
 }
 
