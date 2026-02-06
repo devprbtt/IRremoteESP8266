@@ -3,6 +3,7 @@
 This example provides:
 - Telnet server that accepts one JSON command per line and replies with JSON.
 - Web UI to configure WiFi, emitters, standard HVAC registrations, and config backups.
+- OTA firmware updates via ArduinoOTA and web firmware upload.
 - Optional web UI authentication (admin password) and a built-in HVAC test page.
 
 ## Quick start
@@ -16,6 +17,12 @@ This example provides:
 - **HVACs** (`/hvacs`): register standard IR protocols supported by `IRac`.
 - **Test HVAC** (`/hvacs/test`): send a JSON command from the browser.
 - **Config backup**: download/upload `/config.json` at `/config/download` and `/config/upload`.
+- **Firmware OTA** (`/firmware`): upload a `.bin` firmware image from the browser.
+
+## OTA firmware update
+- **ArduinoOTA** is enabled at boot. Hostname is `<hostname>.local` (`ir-server.local` by default).
+- If a web admin password is set, the same password is also used for ArduinoOTA.
+- **Web OTA**: open `/firmware`, upload a firmware `.bin`, and the device flashes and reboots.
 
 > Note: There is no web form for custom HVAC code maps. Custom HVAC entries must be added by
 > editing the JSON config (see below) and uploading it.

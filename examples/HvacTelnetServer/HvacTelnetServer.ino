@@ -8,6 +8,8 @@
 #include <ESPmDNS.h>
 #include <SPIFFS.h>
 #include <ArduinoJson.h>
+#include <ArduinoOTA.h>
+#include <Update.h>
 
 #include <IRremoteESP8266.h>
 #include <IRac.h>
@@ -73,8 +75,18 @@ struct EmitterRuntime {
   IRac *ac = nullptr;
 };
 
+struct HvacRuntimeState {
+  bool initialized = false;
+  bool power = false;
+  String mode = "off";
+  float setpoint = 24.0f;
+  float currentTemp = 24.0f;
+  String fan = "auto";
+};
+
 Config config;
 EmitterRuntime emitters[kMaxEmitters];
+HvacRuntimeState hvacStates[kMaxHvacs];
 uint8_t emitterRuntimeCount = 0;
 
 WebServer web(80);
@@ -82,6 +94,11 @@ WiFiServer *telnetServer = nullptr;
 WiFiClient telnetClients[kMaxTelnetClients];
 String telnetBuffers[kMaxTelnetClients];
 DNSServer dnsServer;
+
+void initHvacRuntimeStates();
+bool processCommand(JsonDocument &doc, JsonDocument &resp, int8_t sourceTelnetSlot = -1);
+bool sendCustomCode(const HvacConfig &hvac, EmitterRuntime *em, const String &code, const String &encoding);
+String findCustomTempCode(const HvacConfig &hvac, int tempC);
 
 // ---- Helpers ----
 
@@ -316,6 +333,7 @@ void clearConfig() {
     h.customTempCount = 0;
   }
   config.hvacCount = 0;
+  initHvacRuntimeStates();
 }
 
 void loadConfig() {
@@ -428,6 +446,122 @@ EmitterRuntime* getEmitter(uint8_t idx) {
   return &emitters[idx];
 }
 
+void initHvacRuntimeStates() {
+  for (uint8_t i = 0; i < kMaxHvacs; i++) {
+    hvacStates[i] = HvacRuntimeState();
+  }
+}
+
+int8_t findHvacIndexById(const String &id) {
+  for (uint8_t i = 0; i < config.hvacCount; i++) {
+    if (config.hvacs[i].id == id) return static_cast<int8_t>(i);
+  }
+  return -1;
+}
+
+String normalizeMode(const String &in) {
+  String out = in;
+  out.toLowerCase();
+  if (out == "cool" || out == "heat" || out == "dry" || out == "fan" ||
+      out == "off") return out;
+  return "auto";
+}
+
+String normalizeFan(const String &in) {
+  String out = in;
+  out.toLowerCase();
+  if (out == "min" || out == "low" || out == "medium" || out == "high" ||
+      out == "max") return out;
+  return "auto";
+}
+
+String opmodeToString(stdAc::opmode_t mode) {
+  switch (mode) {
+    case stdAc::opmode_t::kCool: return "cool";
+    case stdAc::opmode_t::kHeat: return "heat";
+    case stdAc::opmode_t::kDry: return "dry";
+    case stdAc::opmode_t::kFan: return "fan";
+    case stdAc::opmode_t::kOff: return "off";
+    default: return "auto";
+  }
+}
+
+String fanToString(stdAc::fanspeed_t fan) {
+  switch (fan) {
+    case stdAc::fanspeed_t::kMin: return "min";
+    case stdAc::fanspeed_t::kLow: return "low";
+    case stdAc::fanspeed_t::kMedium: return "medium";
+    case stdAc::fanspeed_t::kHigh: return "high";
+    case stdAc::fanspeed_t::kMax: return "max";
+    default: return "auto";
+  }
+}
+
+bool floatChanged(float a, float b) {
+  return (a > b + 0.05f) || (b > a + 0.05f);
+}
+
+bool hvacStateChanged(const HvacRuntimeState &a, const HvacRuntimeState &b) {
+  if (a.initialized != b.initialized) return true;
+  if (!a.initialized && !b.initialized) return false;
+  if (a.power != b.power) return true;
+  if (a.mode != b.mode) return true;
+  if (a.fan != b.fan) return true;
+  if (floatChanged(a.setpoint, b.setpoint)) return true;
+  if (floatChanged(a.currentTemp, b.currentTemp)) return true;
+  return false;
+}
+
+void ensureHvacStateInitialized(uint8_t idx) {
+  if (idx >= kMaxHvacs) return;
+  if (hvacStates[idx].initialized) return;
+  hvacStates[idx].initialized = true;
+  hvacStates[idx].power = false;
+  hvacStates[idx].mode = "off";
+  hvacStates[idx].setpoint = 24.0f;
+  hvacStates[idx].currentTemp = 24.0f;
+  hvacStates[idx].fan = "auto";
+}
+
+void writeStateJson(JsonObject state, const String &id, const HvacRuntimeState &hvacState) {
+  state["type"] = "state";
+  state["id"] = id;
+  state["power"] = hvacState.power ? "on" : "off";
+  state["mode"] = hvacState.mode;
+  state["setpoint"] = hvacState.setpoint;
+  // No ambient temperature sensor is available, so mirror setpoint.
+  state["current_temp"] = hvacState.setpoint;
+  state["fan"] = hvacState.fan;
+}
+
+void sendTelnetJson(WiFiClient &client, JsonDocument &doc) {
+  String payload;
+  payload.reserve(512);
+  serializeJson(doc, payload);
+  payload += '\n';
+  client.print(payload);
+}
+
+void broadcastStateToTelnetClients(const String &id, const HvacRuntimeState &state, int8_t excludeSlot) {
+  JsonDocument msg;
+  writeStateJson(msg.to<JsonObject>(), id, state);
+  for (uint8_t i = 0; i < kMaxTelnetClients; i++) {
+    if (static_cast<int8_t>(i) == excludeSlot) continue;
+    WiFiClient &c = telnetClients[i];
+    if (!c || !c.connected()) continue;
+    sendTelnetJson(c, msg);
+  }
+}
+
+void sendAllStatesToTelnetClient(WiFiClient &client) {
+  for (uint8_t i = 0; i < config.hvacCount; i++) {
+    ensureHvacStateInitialized(i);
+    JsonDocument msg;
+    writeStateJson(msg.to<JsonObject>(), config.hvacs[i].id, hvacStates[i]);
+    sendTelnetJson(client, msg);
+  }
+}
+
 String protocolOptionsHtml(const String &selected) {
   String out;
   out.reserve(2048);
@@ -502,7 +636,7 @@ String pageHeader(const String &title) {
   html += ".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;}";
   html += ".pill{display:inline-block;background:#1e293b;color:#e2e8f0;padding:2px 8px;border-radius:999px;font-size:12px;margin-left:6px;}";
   html += "</style></head><body><div class='wrap'>";
-  html += "<nav><a href='/'>Home</a><a href='/config'>Config</a><a href='/emitters'>Emitters</a><a href='/hvacs'>HVACs</a><a href='/hvacs/test'>Test HVAC</a><a href='/config/upload'>Upload</a><a href='/config/download'>Download</a></nav>";
+  html += "<nav><a href='/'>Home</a><a href='/config'>Config</a><a href='/emitters'>Emitters</a><a href='/hvacs'>HVACs</a><a href='/hvacs/test'>Test HVAC</a><a href='/firmware'>Firmware</a><a href='/config/upload'>Upload</a><a href='/config/download'>Download</a></nav>";
   return html;
 }
 
@@ -729,6 +863,7 @@ void handleHvacsAdd() {
   h.protocol = web.arg("protocol");
   h.emitterIndex = web.arg("emitter").toInt();
   h.model = web.arg("model").toInt();
+  initHvacRuntimeStates();
   saveConfig();
   Serial.print("web: hvac added id=");
   Serial.println(id);
@@ -747,6 +882,7 @@ void handleHvacsDelete() {
     config.hvacs[i] = config.hvacs[i + 1];
   }
   config.hvacCount--;
+  initHvacRuntimeStates();
   saveConfig();
   Serial.print("web: hvac deleted index ");
   Serial.println(idx);
@@ -859,6 +995,59 @@ void handleConfigUploadDone() {
   ESP.restart();
 }
 
+void handleFirmwarePage() {
+  if (!checkAuth()) { requestAuth(); return; }
+  String html = pageHeader("Firmware Update");
+  html += "<div class='card'><h2>OTA Firmware Update</h2>";
+  html += "<p>Upload a compiled ESP32 firmware binary (.bin) to flash over WiFi.</p>";
+  html += "<form method='POST' action='/firmware/update' enctype='multipart/form-data'>";
+  html += "<input type='file' name='firmware' accept='.bin,application/octet-stream' required>";
+  html += "<button type='submit'>Upload & Flash</button></form>";
+  html += "<p>Alternative OTA endpoint: ArduinoOTA on hostname <code>" +
+          htmlEscape(config.hostname.length() ? config.hostname : kDefaultHostname) +
+          ".local</code>.</p>";
+  html += "</div>";
+  html += pageFooter();
+  web.send(200, "text/html", html);
+}
+
+void handleFirmwareUpdate() {
+  if (!checkAuth()) { requestAuth(); return; }
+  bool ok = !Update.hasError();
+  String html = "<html><body><h3>";
+  html += ok ? "Firmware updated. Rebooting..." : "Firmware update failed.";
+  html += "</h3></body></html>";
+  web.send(ok ? 200 : 500, "text/html", html);
+  if (ok) {
+    delay(500);
+    ESP.restart();
+  }
+}
+
+void handleFirmwareUpload() {
+  if (!checkAuth()) { requestAuth(); return; }
+  HTTPUpload &up = web.upload();
+  if (up.status == UPLOAD_FILE_START) {
+    Serial.printf("ota-web: start %s\n", up.filename.c_str());
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+      Update.printError(Serial);
+    }
+  } else if (up.status == UPLOAD_FILE_WRITE) {
+    if (Update.write(up.buf, up.currentSize) != up.currentSize) {
+      Update.printError(Serial);
+    }
+  } else if (up.status == UPLOAD_FILE_END) {
+    if (Update.end(true)) {
+      Serial.printf("ota-web: success %u bytes\n", up.totalSize);
+    } else {
+      Update.printError(Serial);
+    }
+  } else if (up.status == UPLOAD_FILE_ABORTED) {
+    Update.abort();
+    Serial.println("ota-web: aborted");
+  }
+}
+
 void handleApiConfig() {
   if (!checkAuth()) { requestAuth(); return; }
   String json = configToJsonString();
@@ -882,7 +1071,7 @@ void handleWifiScan() {
   web.send(200, "application/json", out);
 }
 
-bool processCommand(JsonDocument &doc, JsonDocument &resp) {
+bool processCommand(JsonDocument &doc, JsonDocument &resp, int8_t sourceTelnetSlot) {
   String cmd = doc["cmd"] | "send";
   if (cmd == "help") {
     resp["ok"] = true;
@@ -890,11 +1079,15 @@ bool processCommand(JsonDocument &doc, JsonDocument &resp) {
     JsonArray cmds = help["commands"].to<JsonArray>();
     cmds.add("list");
     cmds.add("send");
+    cmds.add("get");
+    cmds.add("get_all");
     cmds.add("raw");
     cmds.add("help");
     JsonArray examples = help["examples"].to<JsonArray>();
     examples.add("{\"cmd\":\"list\"}");
     examples.add("{\"cmd\":\"send\",\"id\":\"1\",\"power\":\"on\",\"mode\":\"cool\",\"temp\":24,\"fan\":\"auto\"}");
+    examples.add("{\"cmd\":\"get\",\"id\":\"1\"}");
+    examples.add("{\"cmd\":\"get_all\"}");
     examples.add("{\"cmd\":\"raw\",\"emitter\":0,\"encoding\":\"pronto\",\"code\":\"0000 006D 0000 ...\"}");
     examples.add("{\"cmd\":\"raw\",\"emitter\":0,\"encoding\":\"gc\",\"code\":\"sendir,1:1,1,38000,1,1,172,172,...\"}");
     return true;
@@ -916,6 +1109,25 @@ bool processCommand(JsonDocument &doc, JsonDocument &resp) {
       o["emitter"] = config.hvacs[i].emitterIndex;
       o["model"] = config.hvacs[i].model;
       o["custom"] = config.hvacs[i].isCustom;
+    }
+    return true;
+  }
+
+  if (cmd == "get") {
+    String id = doc["id"] | "";
+    int8_t hvacIndex = findHvacIndexById(id);
+    if (!id.length()) { resp["ok"] = false; resp["error"] = "missing_id"; return false; }
+    if (hvacIndex < 0) { resp["ok"] = false; resp["error"] = "unknown_id"; return false; }
+    ensureHvacStateInitialized(hvacIndex);
+    writeStateJson(resp.to<JsonObject>(), id, hvacStates[hvacIndex]);
+    return true;
+  }
+
+  if (cmd == "get_all") {
+    JsonArray states = resp.to<JsonArray>();
+    for (uint8_t i = 0; i < config.hvacCount; i++) {
+      ensureHvacStateInitialized(i);
+      writeStateJson(states.add<JsonObject>(), config.hvacs[i].id, hvacStates[i]);
     }
     return true;
   }
@@ -946,8 +1158,25 @@ bool processCommand(JsonDocument &doc, JsonDocument &resp) {
     resp["error"] = "unknown_id";
     return false;
   }
+  int8_t hvacIndex = findHvacIndexById(id);
+  if (hvacIndex < 0) {
+    resp["ok"] = false;
+    resp["error"] = "unknown_id";
+    return false;
+  }
   EmitterRuntime *em = getEmitter(hvac->emitterIndex);
   if (!em || !em->ac) { resp["ok"] = false; resp["error"] = "invalid_emitter"; return false; }
+
+  HvacRuntimeState previous = hvacStates[hvacIndex];
+  HvacRuntimeState nextState = previous;
+  if (!nextState.initialized) {
+    ensureHvacStateInitialized(hvacIndex);
+    nextState = hvacStates[hvacIndex];
+    previous = hvacStates[hvacIndex];
+  }
+  bool hasCurrentTemp = doc["current_temp"].is<float>() ||
+                        doc["current_temp"].is<double>() ||
+                        doc["current_temp"].is<int>();
 
   if (hvac->isCustom || hvac->protocol == "CUSTOM") {
     String encoding = doc["encoding"] | hvac->customEncoding;
@@ -964,9 +1193,32 @@ bool processCommand(JsonDocument &doc, JsonDocument &resp) {
       if (!code.length()) { resp["ok"] = false; resp["error"] = "missing_temp_code"; return false; }
     }
     if (!code.length()) { resp["ok"] = false; resp["error"] = "missing_code"; return false; }
+
+    String modeStr = normalizeMode(doc["mode"] | nextState.mode);
+    String fanStr = normalizeFan(doc["fan"] | nextState.fan);
+    float temp = doc["temp"] | nextState.setpoint;
+    nextState.initialized = true;
+    nextState.power = power;
+    nextState.mode = power ? modeStr : "off";
+    nextState.setpoint = temp;
+    nextState.fan = fanStr;
+    if (hasCurrentTemp) {
+      nextState.currentTemp = doc["current_temp"].as<float>();
+    } else if (!previous.initialized) {
+      nextState.currentTemp = temp;
+    }
+
     bool ok = sendCustomCode(*hvac, em, code, encoding);
-    resp["ok"] = ok;
-    if (!ok) resp["error"] = "send_failed";
+    if (!ok) {
+      resp["ok"] = false;
+      resp["error"] = "send_failed";
+      return false;
+    }
+    hvacStates[hvacIndex] = nextState;
+    writeStateJson(resp.to<JsonObject>(), id, hvacStates[hvacIndex]);
+    if (hvacStateChanged(previous, hvacStates[hvacIndex])) {
+      broadcastStateToTelnetClients(id, hvacStates[hvacIndex], sourceTelnetSlot);
+    }
     return ok;
   }
 
@@ -997,11 +1249,30 @@ bool processCommand(JsonDocument &doc, JsonDocument &resp) {
   int16_t clock = doc["clock"] | -1;
   int16_t model = doc["model"].is<int>() ? (int16_t)(doc["model"] | -1) : hvac->model;
 
+  nextState.initialized = true;
+  nextState.power = power;
+  nextState.mode = opmodeToString(mode);
+  nextState.setpoint = temp;
+  nextState.fan = fanToString(fan);
+  if (hasCurrentTemp) {
+    nextState.currentTemp = doc["current_temp"].as<float>();
+  } else if (!previous.initialized) {
+    nextState.currentTemp = temp;
+  }
+
   bool ok = em->ac->sendAc(proto, model, power, mode, temp, celsius,
                            fan, swingv, swingh, quiet, turbo, econo,
                            light, filter, clean, beep, sleep, clock);
-  resp["ok"] = ok;
-  if (!ok) resp["error"] = "send_failed";
+  if (!ok) {
+    resp["ok"] = false;
+    resp["error"] = "send_failed";
+    return false;
+  }
+  hvacStates[hvacIndex] = nextState;
+  writeStateJson(resp.to<JsonObject>(), id, hvacStates[hvacIndex]);
+  if (hvacStateChanged(previous, hvacStates[hvacIndex])) {
+    broadcastStateToTelnetClients(id, hvacStates[hvacIndex], sourceTelnetSlot);
+  }
   return ok;
 }
 
@@ -1073,6 +1344,8 @@ void setupWeb() {
   web.on("/config/download", HTTP_GET, handleConfigDownload);
   web.on("/config/upload", HTTP_GET, handleConfigUploadPage);
   web.on("/config/upload", HTTP_POST, handleConfigUploadDone, handleConfigUpload);
+  web.on("/firmware", HTTP_GET, handleFirmwarePage);
+  web.on("/firmware/update", HTTP_POST, handleFirmwareUpdate, handleFirmwareUpload);
   web.on("/api/config", HTTP_GET, handleApiConfig);
   web.on("/api/wifi/scan", HTTP_GET, handleWifiScan);
   web.onNotFound([]() {
@@ -1083,11 +1356,6 @@ void setupWeb() {
 }
 
 // ---- Telnet handling ----
-
-void sendTelnetJson(WiFiClient &client, JsonDocument &doc) {
-  serializeJson(doc, client);
-  client.print("\r\n");
-}
 
 void respondTelnetError(WiFiClient &client, const String &message) {
   JsonDocument doc;
@@ -1114,7 +1382,7 @@ String findCustomTempCode(const HvacConfig &hvac, int tempC) {
   return "";
 }
 
-void handleTelnetLine(WiFiClient &client, const String &line) {
+void handleTelnetLine(WiFiClient &client, const String &line, int8_t sourceTelnetSlot) {
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, line);
   if (err) {
@@ -1123,7 +1391,7 @@ void handleTelnetLine(WiFiClient &client, const String &line) {
   }
   JsonDocument resp;
   String cmd = doc["cmd"] | "send";
-  processCommand(doc, resp);
+  processCommand(doc, resp, sourceTelnetSlot);
   sendTelnetJson(client, resp);
   Serial.print("telnet: ");
   Serial.println(cmd);
@@ -1146,6 +1414,7 @@ void handleTelnet() {
         Serial.print(incoming.remoteIP());
         Serial.print(":");
         Serial.println(incoming.remotePort());
+        sendAllStatesToTelnetClient(telnetClients[i]);
         break;
       }
     }
@@ -1167,12 +1436,36 @@ void handleTelnet() {
       if (ch == '\n') {
         String line = telnetBuffers[i];
         telnetBuffers[i] = "";
-        if (line.length()) handleTelnetLine(c, line);
+        if (line.length()) handleTelnetLine(c, line, static_cast<int8_t>(i));
       } else {
         telnetBuffers[i] += ch;
       }
     }
   }
+}
+
+void setupArduinoOta() {
+  const char *host = (config.hostname.length() ? config.hostname.c_str() : kDefaultHostname);
+  ArduinoOTA.setHostname(host);
+  if (config.web.password.length()) {
+    ArduinoOTA.setPassword(config.web.password.c_str());
+  }
+  ArduinoOTA.onStart([]() {
+    Serial.println("ota: start");
+  });
+  ArduinoOTA.onEnd([]() {
+    Serial.println("\nota: end");
+  });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    Serial.printf("ota: %u%%\r", (progress * 100U) / total);
+  });
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("ota: error[%u]\n", error);
+  });
+  ArduinoOTA.begin();
+  Serial.print("ota: ready on ");
+  Serial.print(host);
+  Serial.println(".local");
 }
 
 void startMdns() {
@@ -1243,6 +1536,7 @@ void setup() {
   loadConfig();
   rebuildEmitters();
   startWifi();
+  setupArduinoOta();
   setupWeb();
   if (telnetServer) {
     delete telnetServer;
@@ -1259,4 +1553,5 @@ void loop() {
   web.handleClient();
   handleTelnet();
   dnsServer.processNextRequest();
+  ArduinoOTA.handle();
 }
