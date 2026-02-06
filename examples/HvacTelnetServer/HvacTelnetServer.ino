@@ -452,6 +452,11 @@ void initHvacRuntimeStates() {
   }
 }
 
+void resetHvacRuntimeState(uint8_t idx) {
+  if (idx >= kMaxHvacs) return;
+  hvacStates[idx] = HvacRuntimeState();
+}
+
 int8_t findHvacIndexById(const String &id) {
   for (uint8_t i = 0; i < config.hvacCount; i++) {
     if (config.hvacs[i].id == id) return static_cast<int8_t>(i);
@@ -837,6 +842,35 @@ void handleHvacsPage() {
     html += "<label>Model (optional)</label><input name='model' value='-1'>";
     html += "<button type='submit'>Add</button></form>";
   }
+  if (config.hvacCount > 0 && config.emitterCount > 0) {
+    html += "<h3>Edit HVAC</h3>";
+    html += "<form method='POST' action='/hvacs/update' id='editHvacForm'>";
+    html += "<label>HVAC</label><select name='index' id='editHvacIndex'>";
+    for (uint8_t i = 0; i < config.hvacCount; i++) {
+      const HvacConfig &h = config.hvacs[i];
+      html += "<option value='" + String(i) + "' data-protocol='" + htmlEscape(h.protocol) +
+              "' data-emitter='" + String(h.emitterIndex) + "' data-model='" + String(h.model) + "'>";
+      html += htmlEscape(h.id) + " (" + htmlEscape(h.protocol) + ")</option>";
+    }
+    html += "</select>";
+    html += "<label>Protocol</label><select name='protocol' id='editHvacProtocol'>" + protocolOptionsHtml("") + "</select>";
+    html += "<label>Emitter</label><select name='emitter' id='editHvacEmitter'>" + emitterOptionsHtml(0) + "</select>";
+    html += "<label>Model (optional)</label><input name='model' id='editHvacModel' value='-1'>";
+    html += "<button type='submit' class='secondary'>Update</button></form>";
+    html += "<script>";
+    html += "const hvacSel=document.getElementById('editHvacIndex');";
+    html += "const protoSel=document.getElementById('editHvacProtocol');";
+    html += "const emSel=document.getElementById('editHvacEmitter');";
+    html += "const modelInput=document.getElementById('editHvacModel');";
+    html += "const sync=()=>{if(!hvacSel)return;const opt=hvacSel.selectedOptions[0];";
+    html += "if(!opt)return;const p=opt.dataset.protocol||'';";
+    html += "const e=opt.dataset.emitter||'0';const m=opt.dataset.model||'-1';";
+    html += "if(protoSel){for(const o of protoSel.options){o.selected=(o.value===p);} }";
+    html += "if(emSel){for(const o of emSel.options){o.selected=(o.value===e);} }";
+    html += "if(modelInput){modelInput.value=m;}};";
+    html += "if(hvacSel){hvacSel.addEventListener('change',sync);sync();}";
+    html += "</script>";
+  }
   html += "</div>";
 
   html += pageFooter();
@@ -867,6 +901,48 @@ void handleHvacsAdd() {
   saveConfig();
   Serial.print("web: hvac added id=");
   Serial.println(id);
+  web.sendHeader("Location", "/hvacs");
+  web.send(302, "text/plain", "");
+}
+
+void handleHvacsUpdate() {
+  if (!checkAuth()) { requestAuth(); return; }
+  int idx = web.arg("index").toInt();
+  if (idx < 0 || idx >= config.hvacCount) {
+    web.send(400, "text/plain", "Invalid index");
+    return;
+  }
+  if (config.emitterCount == 0) {
+    web.send(400, "text/plain", "Add an emitter first");
+    return;
+  }
+  String protocol = web.arg("protocol");
+  if (!protocol.length()) {
+    web.send(400, "text/plain", "Missing protocol");
+    return;
+  }
+  if (protocol != "CUSTOM") {
+    decode_type_t proto = strToDecodeType(protocol.c_str());
+    if (!IRac::isProtocolSupported(proto)) {
+      web.send(400, "text/plain", "Unsupported protocol");
+      return;
+    }
+  }
+  int emitterIndex = web.arg("emitter").toInt();
+  if (emitterIndex < 0 || emitterIndex >= config.emitterCount) {
+    web.send(400, "text/plain", "Invalid emitter");
+    return;
+  }
+  int model = web.arg("model").toInt();
+  HvacConfig &h = config.hvacs[idx];
+  h.protocol = protocol;
+  h.emitterIndex = emitterIndex;
+  h.model = model;
+  h.isCustom = (protocol == "CUSTOM");
+  resetHvacRuntimeState(static_cast<uint8_t>(idx));
+  saveConfig();
+  Serial.print("web: hvac updated index ");
+  Serial.println(idx);
   web.sendHeader("Location", "/hvacs");
   web.send(302, "text/plain", "");
 }
@@ -1329,6 +1405,7 @@ void setupWeb() {
   web.on("/hvacs/add", HTTP_POST, handleHvacsAdd);
   web.on("/hvacs/test", HTTP_GET, handleHvacTestPage);
   web.on("/hvacs/test", HTTP_POST, handleHvacTest);
+  web.on("/hvacs/update", HTTP_POST, handleHvacsUpdate);
   web.on("/hvacs/delete", HTTP_GET, handleHvacsDelete);
   web.on("/raw/test", HTTP_POST, handleRawTest);
 
