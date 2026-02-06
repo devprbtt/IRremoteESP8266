@@ -29,6 +29,7 @@ This example provides:
 
 ## Telnet JSON
 Connect to port `4998` (or the configured telnet port) and send one JSON command per line.
+Recommended line terminator is LF (`0x0A`). CRLF is also accepted.
 
 List emitters & HVAC registrations:
 ```
@@ -38,6 +39,16 @@ List emitters & HVAC registrations:
 Send standard HVAC:
 ```
 {"cmd":"send","id":"1","power":"on","mode":"cool","temp":24,"fan":"auto"}
+```
+
+Query one HVAC state:
+```
+{"cmd":"get","id":"1"}
+```
+
+Query all HVAC states:
+```
+{"cmd":"get_all"}
 ```
 
 Send custom HVAC (from config) using temp map or explicit code:
@@ -52,10 +63,17 @@ Raw ad-hoc Pronto/GC:
 {"cmd":"raw","emitter":0,"encoding":"gc","code":"sendir,1:1,1,38000,1,1,172,172,22,64,..."}
 ```
 
-All responses are JSON like:
+State responses are one-line JSON objects like:
 ```
-{"ok":true}
+{"type":"state","id":"1","power":"on","mode":"cool","setpoint":24,"current_temp":24,"fan":"auto"}
 ```
+
+Behavior notes:
+- `send` returns an immediate full `type:"state"` acknowledgement.
+- `get` returns one `type:"state"` object.
+- `get_all` returns a JSON array of `type:"state"` objects.
+- On telnet client connect/reconnect, the server immediately pushes one `type:"state"` line for each registered HVAC.
+- `current_temp` mirrors `setpoint` (no ambient sensor input).
 
 ## Custom HVAC entries via config.json
 Custom HVAC registrations are supported in the saved config (upload/download format). A custom
