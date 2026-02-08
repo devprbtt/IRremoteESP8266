@@ -5,6 +5,7 @@ This example provides:
 - Web UI to configure WiFi, emitters, standard HVAC registrations, and config backups.
 - OTA firmware updates via ArduinoOTA and web firmware upload.
 - Optional web UI authentication (admin password) and a built-in HVAC test page.
+- Raw IR send support for Pronto, GlobalCache, and Racepoint hex formats.
 
 ## Quick start
 - Build for `esp32dev` with PlatformIO using `examples/HvacTelnetServer/platformio.ini`.
@@ -14,8 +15,8 @@ This example provides:
 ## Web UI capabilities
 - **Config** (`/config`): WiFi, hostname, telnet port, optional web password.
 - **Emitters** (`/emitters`): add/remove IR LED GPIOs.
-- **HVACs** (`/hvacs`): register standard IR protocols supported by `IRac`.
-- **Test HVAC** (`/hvacs/test`): send a JSON command from the browser.
+- **HVACs** (`/hvacs`): register and edit HVAC entries (protocol, emitter, model).
+- **Test HVAC** (`/hvacs/test`): send a JSON command from the browser, including `light`.
 - **Config backup**: download/upload `/config.json` at `/config/download` and `/config/upload`.
 - **Firmware OTA** (`/firmware`): upload a `.bin` firmware image from the browser.
 
@@ -38,7 +39,7 @@ List emitters & HVAC registrations:
 
 Send standard HVAC:
 ```
-{"cmd":"send","id":"1","power":"on","mode":"cool","temp":24,"fan":"auto"}
+{"cmd":"send","id":"1","power":"on","mode":"cool","temp":24,"fan":"auto","light":"true"}
 ```
 
 Query one HVAC state:
@@ -55,17 +56,19 @@ Send custom HVAC (from config) using temp map or explicit code:
 ```
 {"cmd":"send","id":"custom1","temp":18}
 {"cmd":"send","id":"custom1","encoding":"pronto","code":"0000 006D 0000 0022 ..."}
+{"cmd":"send","id":"custom1","encoding":"racepoint","code":"0000000000009470..."}
 ```
 
-Raw ad-hoc Pronto/GC:
+Raw ad-hoc Pronto/GC/Racepoint:
 ```
 {"cmd":"raw","emitter":0,"encoding":"pronto","code":"0000 006D 0000 0022 ..."}
 {"cmd":"raw","emitter":0,"encoding":"gc","code":"sendir,1:1,1,38000,1,1,172,172,22,64,..."}
+{"cmd":"raw","emitter":0,"encoding":"racepoint","code":"0000000000009470..."}
 ```
 
 State responses are one-line JSON objects like:
 ```
-{"type":"state","id":"1","power":"on","mode":"cool","setpoint":24,"current_temp":24,"fan":"auto"}
+{"type":"state","id":"1","power":"on","mode":"cool","setpoint":24,"current_temp":24,"fan":"auto","light":"on"}
 ```
 
 Behavior notes:
@@ -78,7 +81,7 @@ Behavior notes:
 ## Custom HVAC entries via config.json
 Custom HVAC registrations are supported in the saved config (upload/download format). A custom
 HVAC entry uses a protocol of `CUSTOM` (or `custom` flag in config) and specifies an IR encoding
-(`pronto` or `gc`), an optional off code, and an optional temp-to-code map.
+(`pronto`, `gc`, or `racepoint`), an optional off code, and an optional temp-to-code map.
 
 Example snippet:
 ```
@@ -100,6 +103,17 @@ Example snippet:
     }
   ]
 }
+```
+
+## Racepoint format notes
+Racepoint/Savant hex strings are accepted as a contiguous hex blob or with separators; non-hex
+characters are ignored. The first 16-bit word between 20000 and 60000 is treated as the carrier
+frequency in Hz. All following 16-bit words are treated as mark/space durations in carrier
+cycles and converted to microseconds. Trailing 0000 words are ignored.
+
+Example (from a Racepoint XML profile):
+```
+000000000000948c015700AC00150041001500160015001600150041001500160015001600150016001500160015001600150041001500410015001600150041001500410015004100150041001500410015004100150041001500160015004100150041001500160015001600150016001500160015001600150041001500160015001600150041001500410015061100000000
 ```
 
 ## Accessing the device

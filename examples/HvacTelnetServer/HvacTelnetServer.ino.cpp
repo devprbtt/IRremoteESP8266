@@ -1,5 +1,8 @@
-// HvacTelnetServer.ino
-// ESP32 example: Telnet JSON HVAC control + web configuration UI.
+# 1 "C:\\Users\\Paulo\\AppData\\Local\\Temp\\tmpp78aja6j"
+#include <Arduino.h>
+# 1 "I:/irhvactelnet/IRremoteESP8266/examples/HvacTelnetServer/HvacTelnetServer.ino"
+
+
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -16,7 +19,7 @@
 #include <IRsend.h>
 #include <IRutils.h>
 
-// ---- User-tunable limits ----
+
 static const uint8_t kMaxTelnetClients = 4;
 static const uint8_t kMaxEmitters = 8;
 static const uint8_t kMaxHvacs = 32;
@@ -38,7 +41,7 @@ struct HvacConfig {
   int emitterIndex = -1;
   int model = -1;
   bool isCustom = false;
-  String customEncoding;  // "pronto" or "gc"
+  String customEncoding;
   String customOff;
   CustomTempCode customTemps[kMaxCustomTemps];
   uint8_t customTempCount = 0;
@@ -100,9 +103,77 @@ void initHvacRuntimeStates();
 bool processCommand(JsonDocument &doc, JsonDocument &resp, int8_t sourceTelnetSlot = -1);
 bool sendCustomCode(const HvacConfig &hvac, EmitterRuntime *em, const String &code, const String &encoding);
 String findCustomTempCode(const HvacConfig &hvac, int tempC);
-
-// ---- Helpers ----
-
+bool isAuthRequired();
+bool checkAuth();
+void requestAuth();
+String htmlEscape(const String &input);
+uint16_t countValuesInStr(const String str, char sep);
+bool isTokenSep(char c);
+bool isHexDigitChar(char c);
+uint16_t countTokensFlexible(const String &str);
+bool nextTokenFlexible(const String &str, size_t &pos, String &token);
+bool parseStringAndSendGC(IRsend *irsend, const String str);
+bool parseStringAndSendPronto(IRsend *irsend, const String str, uint16_t repeats);
+bool parseStringAndSendRacepoint(IRsend *irsend, const String str);
+String configToJsonString();
+void saveConfig();
+void clearConfig();
+void loadConfig();
+void rebuildEmitters();
+bool findHvacById(const String &id, HvacConfig *&out);
+EmitterRuntime* getEmitter(uint8_t idx);
+void resetHvacRuntimeState(uint8_t idx);
+int8_t findHvacIndexById(const String &id);
+String normalizeMode(const String &in);
+String normalizeFan(const String &in);
+bool floatChanged(float a, float b);
+bool hvacStateChanged(const HvacRuntimeState &a, const HvacRuntimeState &b);
+void ensureHvacStateInitialized(uint8_t idx);
+void writeStateJson(JsonObject state, const String &id, const HvacRuntimeState &hvacState);
+void sendTelnetJson(WiFiClient &client, JsonDocument &doc);
+void broadcastStateToTelnetClients(const String &id, const HvacRuntimeState &state, int8_t excludeSlot);
+void sendAllStatesToTelnetClient(WiFiClient &client);
+String protocolOptionsHtml(const String &selected);
+String emitterOptionsHtml(int selectedIndex);
+String nextHvacId();
+String networkListHtml();
+String pageHeader(const String &title);
+String pageFooter();
+void handleHome();
+void handleConfigPage();
+void handleConfigSave();
+void handleEmittersPage();
+void handleEmittersAdd();
+void handleEmittersDelete();
+void handleHvacsPage();
+void handleHvacsAdd();
+void handleHvacsUpdate();
+void handleHvacsDelete();
+void handleHvacTestPage();
+void handleConfigDownload();
+void handleConfigUploadPage();
+void handleConfigUpload();
+void handleConfigUploadDone();
+void handleFirmwarePage();
+void handleFirmwareUpdate();
+void handleFirmwareUpload();
+void handleApiConfig();
+void handleWifiScan();
+bool processCommand(JsonDocument &doc, JsonDocument &resp, int8_t sourceTelnetSlot);
+void handleHvacTest();
+void handleRawTest();
+void handleCaptive204();
+void handleCaptiveRedirect();
+void setupWeb();
+void respondTelnetError(WiFiClient &client, const String &message);
+void handleTelnetLine(WiFiClient &client, const String &line, int8_t sourceTelnetSlot);
+void handleTelnet();
+void setupArduinoOta();
+void startMdns();
+void startWifi();
+void setup();
+void loop();
+#line 106 "I:/irhvactelnet/IRremoteESP8266/examples/HvacTelnetServer/HvacTelnetServer.ino"
 bool isAuthRequired() { return config.web.password.length() > 0; }
 
 bool checkAuth() {
@@ -188,7 +259,7 @@ bool parseStringAndSendGC(IRsend *irsend, const String str) {
 #if SEND_GLOBALCACHE
   String tmp_str = str;
   tmp_str.trim();
-  // Allow full GlobalCache strings like "sendir,1:1,1,...."
+
   if (tmp_str.startsWith(PSTR("sendir,"))) tmp_str = tmp_str.substring(7);
   if (tmp_str.startsWith(PSTR("1:1,1,"))) tmp_str = tmp_str.substring(6);
   uint16_t count = countTokensFlexible(tmp_str);
@@ -215,18 +286,18 @@ bool parseStringAndSendPronto(IRsend *irsend, const String str, uint16_t repeats
   String tmp_str = str;
   tmp_str.trim();
 
-  // Allow either comma- or space-separated Pronto codes.
+
   uint16_t count = countTokensFlexible(tmp_str);
   size_t pos = 0;
   String token;
 
-  // Optional repeat prefix e.g. "R3 ..."
+
   if (nextTokenFlexible(tmp_str, pos, token)) {
     if (token.length() > 1 && (token[0] == 'R' || token[0] == 'r')) {
       repeats = token.substring(1).toInt();
-      count--;  // Skip repeat token from payload count.
+      count--;
     } else {
-      // Rewind to start of first code token.
+
       pos = 0;
     }
   }
@@ -235,7 +306,7 @@ bool parseStringAndSendPronto(IRsend *irsend, const String str, uint16_t repeats
   uint16_t *code_array = newCodeArray(count);
   if (!code_array) return false;
   uint16_t filled = 0;
-  // If we consumed a repeat token above, pos already points to next token.
+
   while (nextTokenFlexible(tmp_str, pos, token) && filled < count) {
     code_array[filled++] = strtoul(token.c_str(), NULL, 16);
   }
@@ -613,7 +684,7 @@ void writeStateJson(JsonObject state, const String &id, const HvacRuntimeState &
   state["power"] = hvacState.power ? "on" : "off";
   state["mode"] = hvacState.mode;
   state["setpoint"] = hvacState.setpoint;
-  // No ambient temperature sensor is available, so mirror setpoint.
+
   state["current_temp"] = hvacState.setpoint;
   state["fan"] = hvacState.fan;
   state["light"] = hvacState.light ? "on" : "off";
@@ -727,7 +798,7 @@ String pageHeader(const String &title) {
 
 String pageFooter() { return "</div></body></html>"; }
 
-// ---- Web Handlers ----
+
 
 void handleHome() {
   if (!checkAuth()) { requestAuth(); return; }
@@ -1494,7 +1565,7 @@ void handleRawTest() {
   web.send(200, "application/json", respStr);
 }
 
-// Captive-portal probes (Android/iOS/Windows) create noisy 404 logs; respond quietly.
+
 void handleCaptive204() { web.send(204); }
 void handleCaptiveRedirect() {
   web.sendHeader("Location", "/");
@@ -1516,7 +1587,7 @@ void setupWeb() {
   web.on("/hvacs/delete", HTTP_GET, handleHvacsDelete);
   web.on("/raw/test", HTTP_POST, handleRawTest);
 
-  // Captive portal & connectivity check endpoints.
+
   web.on("/generate_204", HTTP_ANY, handleCaptive204);
   web.on("/gen_204", HTTP_ANY, handleCaptive204);
   web.on("/hotspot-detect.html", HTTP_ANY, handleCaptiveRedirect);
@@ -1539,7 +1610,7 @@ void setupWeb() {
   web.begin();
 }
 
-// ---- Telnet handling ----
+
 
 void respondTelnetError(WiFiClient &client, const String &message) {
   JsonDocument doc;
