@@ -22,6 +22,7 @@ static const uint8_t kMaxEmitters = 8;
 static const uint8_t kMaxHvacs = 32;
 static const uint8_t kMaxCustomTemps = 16;
 static const uint16_t kDefaultTelnetPort = 4998;
+static const uint16_t kMonitorLogCapacity = 200;
 
 static const char *kConfigPath = "/config.json";
 static const char *kApSsid = "IR-HVAC-Setup";
@@ -95,11 +96,19 @@ WiFiServer *telnetServer = nullptr;
 WiFiClient telnetClients[kMaxTelnetClients];
 String telnetBuffers[kMaxTelnetClients];
 DNSServer dnsServer;
+bool telnetMonitorEnabled = true;
+String serialConsoleBuffer;
+String telnetMonitorLog[kMonitorLogCapacity];
+uint16_t telnetMonitorLogStart = 0;
+uint16_t telnetMonitorLogCount = 0;
 
 void initHvacRuntimeStates();
 bool processCommand(JsonDocument &doc, JsonDocument &resp, int8_t sourceTelnetSlot = -1);
 bool sendCustomCode(const HvacConfig &hvac, EmitterRuntime *em, const String &code, const String &encoding);
 String findCustomTempCode(const HvacConfig &hvac, int tempC);
+void handleSerialConsole();
+void addMonitorLogEntry(const String &line);
+void clearMonitorLog();
 
 // ---- Helpers ----
 
@@ -113,6 +122,78 @@ bool checkAuth() {
 void requestAuth() {
   if (!isAuthRequired()) return;
   web.requestAuthentication();
+}
+
+void printMonitorStatus() {
+  Serial.print("monitor: telnet ");
+  Serial.println(telnetMonitorEnabled ? "on" : "off");
+}
+
+void addMonitorLogEntry(const String &line) {
+  String entry = "[" + String(millis()) + " ms] " + line;
+  if (telnetMonitorLogCount < kMonitorLogCapacity) {
+    uint16_t idx = (telnetMonitorLogStart + telnetMonitorLogCount) % kMonitorLogCapacity;
+    telnetMonitorLog[idx] = entry;
+    telnetMonitorLogCount++;
+    return;
+  }
+  telnetMonitorLog[telnetMonitorLogStart] = entry;
+  telnetMonitorLogStart = (telnetMonitorLogStart + 1) % kMonitorLogCapacity;
+}
+
+void clearMonitorLog() {
+  telnetMonitorLogStart = 0;
+  telnetMonitorLogCount = 0;
+}
+
+void handleConsoleCommand(const String &line) {
+  String cmd = line;
+  cmd.trim();
+  cmd.toLowerCase();
+  if (!cmd.length()) return;
+
+  if (cmd == "monitor on" || cmd == "telnet monitor on") {
+    telnetMonitorEnabled = true;
+    printMonitorStatus();
+    return;
+  }
+  if (cmd == "monitor off" || cmd == "telnet monitor off") {
+    telnetMonitorEnabled = false;
+    printMonitorStatus();
+    return;
+  }
+  if (cmd == "monitor status" || cmd == "telnet monitor status") {
+    printMonitorStatus();
+    return;
+  }
+  if (cmd == "monitor help" || cmd == "help") {
+    Serial.println("monitor commands:");
+    Serial.println("  monitor on");
+    Serial.println("  monitor off");
+    Serial.println("  monitor status");
+    return;
+  }
+  Serial.print("monitor: unknown command: ");
+  Serial.println(line);
+}
+
+void handleSerialConsole() {
+  while (Serial.available()) {
+    char ch = static_cast<char>(Serial.read());
+    if (ch == '\r') continue;
+    if (ch == '\n') {
+      if (serialConsoleBuffer.length()) {
+        handleConsoleCommand(serialConsoleBuffer);
+        serialConsoleBuffer = "";
+      }
+      continue;
+    }
+    serialConsoleBuffer += ch;
+    if (serialConsoleBuffer.length() > 200) {
+      serialConsoleBuffer = "";
+      Serial.println("monitor: command too long, cleared");
+    }
+  }
 }
 
 String htmlEscape(const String &input) {
@@ -721,7 +802,7 @@ String pageHeader(const String &title) {
   html += ".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;}";
   html += ".pill{display:inline-block;background:#1e293b;color:#e2e8f0;padding:2px 8px;border-radius:999px;font-size:12px;margin-left:6px;}";
   html += "</style></head><body><div class='wrap'>";
-  html += "<nav><a href='/'>Home</a><a href='/config'>Config</a><a href='/emitters'>Emitters</a><a href='/hvacs'>HVACs</a><a href='/hvacs/test'>Test HVAC</a><a href='/firmware'>Firmware</a><a href='/config/upload'>Upload</a><a href='/config/download'>Download</a></nav>";
+  html += "<nav><a href='/'>Home</a><a href='/config'>Config</a><a href='/emitters'>Emitters</a><a href='/hvacs'>HVACs</a><a href='/hvacs/test'>Test HVAC</a><a href='/monitor'>Monitor</a><a href='/firmware'>Firmware</a><a href='/config/upload'>Upload</a><a href='/config/download'>Download</a></nav>";
   return html;
 }
 
@@ -1494,6 +1575,76 @@ void handleRawTest() {
   web.send(200, "application/json", respStr);
 }
 
+void handleMonitorPage() {
+  if (!checkAuth()) { requestAuth(); return; }
+  String html = pageHeader("Telnet Monitor");
+  html += "<div class='card'><h2>Telnet Monitor</h2>";
+  html += "<p>Status: <strong id='monState'>-</strong></p>";
+  html += "<div class='row'><button type='button' id='toggleBtn'>Toggle Monitor</button>";
+  html += "<button type='button' class='secondary' id='clearBtn'>Clear Log</button></div>";
+  html += "<p>Showing latest " + String(kMonitorLogCapacity) + " lines (RX/TX).</p>";
+  html += "<pre id='logBox'>Loading...</pre></div>";
+  html += "<script>";
+  html += "const monState=document.getElementById('monState');";
+  html += "const logBox=document.getElementById('logBox');";
+  html += "const toggleBtn=document.getElementById('toggleBtn');";
+  html += "const clearBtn=document.getElementById('clearBtn');";
+  html += "let enabled=false;";
+  html += "const load=async()=>{";
+  html += "try{const r=await fetch('/api/monitor');const d=await r.json();";
+  html += "enabled=!!d.enabled;monState.textContent=enabled?'on':'off';";
+  html += "logBox.textContent=(d.lines||[]).join('\\n');";
+  html += "logBox.scrollTop=logBox.scrollHeight;";
+  html += "}catch(e){logBox.textContent='Monitor API error';}};";
+  html += "toggleBtn.addEventListener('click',async()=>{";
+  html += "const body=new URLSearchParams({enabled:enabled?'0':'1'});";
+  html += "await fetch('/monitor/toggle',{method:'POST',body});await load();});";
+  html += "clearBtn.addEventListener('click',async()=>{";
+  html += "await fetch('/monitor/clear',{method:'POST'});await load();});";
+  html += "load();setInterval(load,1000);";
+  html += "</script>";
+  html += pageFooter();
+  web.send(200, "text/html", html);
+}
+
+void handleApiMonitor() {
+  if (!checkAuth()) { requestAuth(); return; }
+  JsonDocument doc;
+  doc["enabled"] = telnetMonitorEnabled;
+  JsonArray lines = doc["lines"].to<JsonArray>();
+  for (uint16_t i = 0; i < telnetMonitorLogCount; i++) {
+    uint16_t idx = (telnetMonitorLogStart + i) % kMonitorLogCapacity;
+    lines.add(telnetMonitorLog[idx]);
+  }
+  String out;
+  serializeJson(doc, out);
+  web.send(200, "application/json", out);
+}
+
+void handleMonitorClear() {
+  if (!checkAuth()) { requestAuth(); return; }
+  clearMonitorLog();
+  JsonDocument doc;
+  doc["ok"] = true;
+  String out;
+  serializeJson(doc, out);
+  web.send(200, "application/json", out);
+}
+
+void handleMonitorToggle() {
+  if (!checkAuth()) { requestAuth(); return; }
+  String enabled = web.arg("enabled");
+  enabled.toLowerCase();
+  telnetMonitorEnabled = (enabled == "1" || enabled == "true" || enabled == "on");
+  printMonitorStatus();
+  JsonDocument doc;
+  doc["ok"] = true;
+  doc["enabled"] = telnetMonitorEnabled;
+  String out;
+  serializeJson(doc, out);
+  web.send(200, "application/json", out);
+}
+
 // Captive-portal probes (Android/iOS/Windows) create noisy 404 logs; respond quietly.
 void handleCaptive204() { web.send(204); }
 void handleCaptiveRedirect() {
@@ -1515,6 +1666,10 @@ void setupWeb() {
   web.on("/hvacs/update", HTTP_POST, handleHvacsUpdate);
   web.on("/hvacs/delete", HTTP_GET, handleHvacsDelete);
   web.on("/raw/test", HTTP_POST, handleRawTest);
+  web.on("/monitor", HTTP_GET, handleMonitorPage);
+  web.on("/api/monitor", HTTP_GET, handleApiMonitor);
+  web.on("/monitor/clear", HTTP_POST, handleMonitorClear);
+  web.on("/monitor/toggle", HTTP_POST, handleMonitorToggle);
 
   // Captive portal & connectivity check endpoints.
   web.on("/generate_204", HTTP_ANY, handleCaptive204);
@@ -1570,9 +1725,20 @@ String findCustomTempCode(const HvacConfig &hvac, int tempC) {
 }
 
 void handleTelnetLine(WiFiClient &client, const String &line, int8_t sourceTelnetSlot) {
+  if (telnetMonitorEnabled) {
+    String rxMsg = "RX slot=" + String(sourceTelnetSlot) + " from " +
+                   client.remoteIP().toString() + ":" + String(client.remotePort()) +
+                   " line=" + line;
+    addMonitorLogEntry(rxMsg);
+    Serial.println("telnet-" + rxMsg);
+  }
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, line);
   if (err) {
+    if (telnetMonitorEnabled) {
+      addMonitorLogEntry("RX parse=invalid_json");
+      Serial.println("telnet-rx parse=invalid_json");
+    }
     respondTelnetError(client, "invalid_json");
     return;
   }
@@ -1580,8 +1746,16 @@ void handleTelnetLine(WiFiClient &client, const String &line, int8_t sourceTelne
   String cmd = doc["cmd"] | "send";
   processCommand(doc, resp, sourceTelnetSlot);
   sendTelnetJson(client, resp);
-  Serial.print("telnet: ");
-  Serial.println(cmd);
+  if (telnetMonitorEnabled) {
+    String respStr;
+    serializeJson(resp, respStr);
+    String txMsg = "TX slot=" + String(sourceTelnetSlot) + " cmd=" + cmd + " line=" + respStr;
+    addMonitorLogEntry(txMsg);
+    Serial.println("telnet-" + txMsg);
+  } else {
+    Serial.print("telnet: ");
+    Serial.println(cmd);
+  }
 }
 
 void handleTelnet() {
@@ -1734,9 +1908,12 @@ void setup() {
   telnetServer->setNoDelay(true);
   Serial.print("telnet: listening on ");
   Serial.println(config.telnetPort);
+  printMonitorStatus();
+  Serial.println("monitor: use 'monitor on|off|status' via serial terminal");
 }
 
 void loop() {
+  handleSerialConsole();
   web.handleClient();
   handleTelnet();
   dnsServer.processNextRequest();

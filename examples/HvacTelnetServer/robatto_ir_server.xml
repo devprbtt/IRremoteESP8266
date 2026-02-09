@@ -11,28 +11,9 @@
         Version 1.0: initial JSON HVAC profile with optimistic state updates.
         Version 1.1: added JSON state feedback parsing by id for per-zone UI updates.
         Version 2.0: add 8 Racepoint IR outputs mapped to emitters 0-7.
-
-        IR output mapping:
-        IR 1 -> emitter 0
-        IR 2 -> emitter 1
-        IR 3 -> emitter 2
-        IR 4 -> emitter 3
-        IR 5 -> emitter 4
-        IR 6 -> emitter 5
-        IR 7 -> emitter 6
-        IR 8 -> emitter 7
+        Version 2.1: switched from 8 physical IR outputs to a single IR control interface.
+        Version 2.2: removed IR control interface; profile now uses IP control only.
     </notes>
-
-    <device_control_interfaces>
-        <ir name_on_component="IR 1" connector_type="ir_control_captive_screw"/>
-        <ir name_on_component="IR 2" connector_type="ir_control_captive_screw"/>
-        <ir name_on_component="IR 3" connector_type="ir_control_captive_screw"/>
-        <ir name_on_component="IR 4" connector_type="ir_control_captive_screw"/>
-        <ir name_on_component="IR 5" connector_type="ir_control_captive_screw"/>
-        <ir name_on_component="IR 6" connector_type="ir_control_captive_screw"/>
-        <ir name_on_component="IR 7" connector_type="ir_control_captive_screw"/>
-        <ir name_on_component="IR 8" connector_type="ir_control_captive_screw"/>
-    </device_control_interfaces>
 
     <control_interfaces preferred="ip">
         <ip port="4998" protocol="tcp" response_time_length_ms="500" name_on_component="Ethernet">
@@ -79,102 +60,11 @@
         </implementation>
 
         <custom_component_actions>
-            <action name="SendIR1">
-                <action_argument name="IRCode" note="Racepoint hex code"/>
-                <command_interface interface="ip">
-                    <command response_required="no" partial_response="no">
-                        <command_string type="character">{"cmd":"raw","emitter":0,"encoding":"racepoint","code":"</command_string>
-                        <parameter_list>
-                            <parameter parameter_data_type="character" action_argument="IRCode"/>
-                            <parameter parameter_data_type="character">"}</parameter>
-                        </parameter_list>
-                        <delay ms_delay="100"/>
-                    </command>
-                </command_interface>
-            </action>
-            <action name="SendIR2">
+            <action name="SendIR">
                 <action_argument name="IRCode" note="Racepoint hex code"/>
                 <command_interface interface="ip">
                     <command response_required="no" partial_response="no">
                         <command_string type="character">{"cmd":"raw","emitter":1,"encoding":"racepoint","code":"</command_string>
-                        <parameter_list>
-                            <parameter parameter_data_type="character" action_argument="IRCode"/>
-                            <parameter parameter_data_type="character">"}</parameter>
-                        </parameter_list>
-                        <delay ms_delay="100"/>
-                    </command>
-                </command_interface>
-            </action>
-            <action name="SendIR3">
-                <action_argument name="IRCode" note="Racepoint hex code"/>
-                <command_interface interface="ip">
-                    <command response_required="no" partial_response="no">
-                        <command_string type="character">{"cmd":"raw","emitter":2,"encoding":"racepoint","code":"</command_string>
-                        <parameter_list>
-                            <parameter parameter_data_type="character" action_argument="IRCode"/>
-                            <parameter parameter_data_type="character">"}</parameter>
-                        </parameter_list>
-                        <delay ms_delay="100"/>
-                    </command>
-                </command_interface>
-            </action>
-            <action name="SendIR4">
-                <action_argument name="IRCode" note="Racepoint hex code"/>
-                <command_interface interface="ip">
-                    <command response_required="no" partial_response="no">
-                        <command_string type="character">{"cmd":"raw","emitter":3,"encoding":"racepoint","code":"</command_string>
-                        <parameter_list>
-                            <parameter parameter_data_type="character" action_argument="IRCode"/>
-                            <parameter parameter_data_type="character">"}</parameter>
-                        </parameter_list>
-                        <delay ms_delay="100"/>
-                    </command>
-                </command_interface>
-            </action>
-            <action name="SendIR5">
-                <action_argument name="IRCode" note="Racepoint hex code"/>
-                <command_interface interface="ip">
-                    <command response_required="no" partial_response="no">
-                        <command_string type="character">{"cmd":"raw","emitter":4,"encoding":"racepoint","code":"</command_string>
-                        <parameter_list>
-                            <parameter parameter_data_type="character" action_argument="IRCode"/>
-                            <parameter parameter_data_type="character">"}</parameter>
-                        </parameter_list>
-                        <delay ms_delay="100"/>
-                    </command>
-                </command_interface>
-            </action>
-            <action name="SendIR6">
-                <action_argument name="IRCode" note="Racepoint hex code"/>
-                <command_interface interface="ip">
-                    <command response_required="no" partial_response="no">
-                        <command_string type="character">{"cmd":"raw","emitter":5,"encoding":"racepoint","code":"</command_string>
-                        <parameter_list>
-                            <parameter parameter_data_type="character" action_argument="IRCode"/>
-                            <parameter parameter_data_type="character">"}</parameter>
-                        </parameter_list>
-                        <delay ms_delay="100"/>
-                    </command>
-                </command_interface>
-            </action>
-            <action name="SendIR7">
-                <action_argument name="IRCode" note="Racepoint hex code"/>
-                <command_interface interface="ip">
-                    <command response_required="no" partial_response="no">
-                        <command_string type="character">{"cmd":"raw","emitter":6,"encoding":"racepoint","code":"</command_string>
-                        <parameter_list>
-                            <parameter parameter_data_type="character" action_argument="IRCode"/>
-                            <parameter parameter_data_type="character">"}</parameter>
-                        </parameter_list>
-                        <delay ms_delay="100"/>
-                    </command>
-                </command_interface>
-            </action>
-            <action name="SendIR8">
-                <action_argument name="IRCode" note="Racepoint hex code"/>
-                <command_interface interface="ip">
-                    <command response_required="no" partial_response="no">
-                        <command_string type="character">{"cmd":"raw","emitter":7,"encoding":"racepoint","code":"</command_string>
                         <parameter_list>
                             <parameter parameter_data_type="character" action_argument="IRCode"/>
                             <parameter parameter_data_type="character">"}</parameter>
