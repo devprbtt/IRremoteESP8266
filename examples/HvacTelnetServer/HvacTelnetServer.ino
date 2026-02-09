@@ -82,6 +82,7 @@ struct HvacRuntimeState {
   float setpoint = 24.0f;
   float currentTemp = 24.0f;
   String fan = "auto";
+  bool light = false;
 };
 
 Config config;
@@ -143,6 +144,12 @@ uint16_t countValuesInStr(const String str, char sep) {
 
 bool isTokenSep(char c) {
   return c == ',' || c == ';' || c == ' ' || c == '\t';
+}
+
+bool isHexDigitChar(char c) {
+  return (c >= '0' && c <= '9') ||
+         (c >= 'a' && c <= 'f') ||
+         (c >= 'A' && c <= 'F');
 }
 
 uint16_t countTokensFlexible(const String &str) {
@@ -239,6 +246,76 @@ bool parseStringAndSendPronto(IRsend *irsend, const String str, uint16_t repeats
   (void)irsend;
   (void)str;
   (void)repeats;
+  return false;
+#endif
+}
+
+bool parseStringAndSendRacepoint(IRsend *irsend, const String str) {
+#if SEND_RAW
+  if (!irsend) return false;
+  String hex;
+  hex.reserve(str.length());
+  for (size_t i = 0; i < str.length(); i++) {
+    char c = str[i];
+    if (isHexDigitChar(c)) hex += c;
+  }
+  if (hex.length() < 8 || (hex.length() % 4) != 0) return false;
+
+  const uint16_t wordCount = hex.length() / 4;
+  uint16_t *words = newCodeArray(wordCount);
+  if (!words) return false;
+
+  char buf[5];
+  buf[4] = '\0';
+  for (uint16_t i = 0; i < wordCount; i++) {
+    buf[0] = hex[i * 4];
+    buf[1] = hex[i * 4 + 1];
+    buf[2] = hex[i * 4 + 2];
+    buf[3] = hex[i * 4 + 3];
+    words[i] = static_cast<uint16_t>(strtoul(buf, NULL, 16));
+  }
+
+  uint16_t freq = 0;
+  uint16_t start = 0;
+  for (uint16_t i = 0; i < wordCount; i++) {
+    if (words[i] >= 20000 && words[i] <= 60000) {
+      freq = words[i];
+      start = i + 1;
+      break;
+    }
+  }
+  if (freq == 0 || start >= wordCount) {
+    free(words);
+    return false;
+  }
+
+  uint16_t end = wordCount;
+  while (end > start && words[end - 1] == 0) end--;
+  uint16_t pulseCount = end - start;
+  if (pulseCount == 0) {
+    free(words);
+    return false;
+  }
+
+  irsend->enableIROut(freq);
+  for (uint16_t i = 0; i < pulseCount; i++) {
+    uint32_t duration = (static_cast<uint32_t>(words[start + i]) * 1000000UL + (freq / 2)) / freq;
+    if ((i & 1) == 0) {
+      while (duration > 0) {
+        uint16_t chunk = duration > 65535 ? 65535 : static_cast<uint16_t>(duration);
+        irsend->mark(chunk);
+        duration -= chunk;
+      }
+    } else {
+      irsend->space(duration);
+    }
+  }
+  irsend->space(0);
+  free(words);
+  return true;
+#else
+  (void)irsend;
+  (void)str;
   return false;
 #endif
 }
@@ -452,6 +529,11 @@ void initHvacRuntimeStates() {
   }
 }
 
+void resetHvacRuntimeState(uint8_t idx) {
+  if (idx >= kMaxHvacs) return;
+  hvacStates[idx] = HvacRuntimeState();
+}
+
 int8_t findHvacIndexById(const String &id) {
   for (uint8_t i = 0; i < config.hvacCount; i++) {
     if (config.hvacs[i].id == id) return static_cast<int8_t>(i);
@@ -507,6 +589,7 @@ bool hvacStateChanged(const HvacRuntimeState &a, const HvacRuntimeState &b) {
   if (a.power != b.power) return true;
   if (a.mode != b.mode) return true;
   if (a.fan != b.fan) return true;
+  if (a.light != b.light) return true;
   if (floatChanged(a.setpoint, b.setpoint)) return true;
   if (floatChanged(a.currentTemp, b.currentTemp)) return true;
   return false;
@@ -521,6 +604,7 @@ void ensureHvacStateInitialized(uint8_t idx) {
   hvacStates[idx].setpoint = 24.0f;
   hvacStates[idx].currentTemp = 24.0f;
   hvacStates[idx].fan = "auto";
+  hvacStates[idx].light = false;
 }
 
 void writeStateJson(JsonObject state, const String &id, const HvacRuntimeState &hvacState) {
@@ -532,6 +616,7 @@ void writeStateJson(JsonObject state, const String &id, const HvacRuntimeState &
   // No ambient temperature sensor is available, so mirror setpoint.
   state["current_temp"] = hvacState.setpoint;
   state["fan"] = hvacState.fan;
+  state["light"] = hvacState.light ? "on" : "off";
 }
 
 void sendTelnetJson(WiFiClient &client, JsonDocument &doc) {
@@ -837,6 +922,35 @@ void handleHvacsPage() {
     html += "<label>Model (optional)</label><input name='model' value='-1'>";
     html += "<button type='submit'>Add</button></form>";
   }
+  if (config.hvacCount > 0 && config.emitterCount > 0) {
+    html += "<h3>Edit HVAC</h3>";
+    html += "<form method='POST' action='/hvacs/update' id='editHvacForm'>";
+    html += "<label>HVAC</label><select name='index' id='editHvacIndex'>";
+    for (uint8_t i = 0; i < config.hvacCount; i++) {
+      const HvacConfig &h = config.hvacs[i];
+      html += "<option value='" + String(i) + "' data-protocol='" + htmlEscape(h.protocol) +
+              "' data-emitter='" + String(h.emitterIndex) + "' data-model='" + String(h.model) + "'>";
+      html += htmlEscape(h.id) + " (" + htmlEscape(h.protocol) + ")</option>";
+    }
+    html += "</select>";
+    html += "<label>Protocol</label><select name='protocol' id='editHvacProtocol'>" + protocolOptionsHtml("") + "</select>";
+    html += "<label>Emitter</label><select name='emitter' id='editHvacEmitter'>" + emitterOptionsHtml(0) + "</select>";
+    html += "<label>Model (optional)</label><input name='model' id='editHvacModel' value='-1'>";
+    html += "<button type='submit' class='secondary'>Update</button></form>";
+    html += "<script>";
+    html += "const hvacSel=document.getElementById('editHvacIndex');";
+    html += "const protoSel=document.getElementById('editHvacProtocol');";
+    html += "const emSel=document.getElementById('editHvacEmitter');";
+    html += "const modelInput=document.getElementById('editHvacModel');";
+    html += "const sync=()=>{if(!hvacSel)return;const opt=hvacSel.selectedOptions[0];";
+    html += "if(!opt)return;const p=opt.dataset.protocol||'';";
+    html += "const e=opt.dataset.emitter||'0';const m=opt.dataset.model||'-1';";
+    html += "if(protoSel){for(const o of protoSel.options){o.selected=(o.value===p);} }";
+    html += "if(emSel){for(const o of emSel.options){o.selected=(o.value===e);} }";
+    html += "if(modelInput){modelInput.value=m;}};";
+    html += "if(hvacSel){hvacSel.addEventListener('change',sync);sync();}";
+    html += "</script>";
+  }
   html += "</div>";
 
   html += pageFooter();
@@ -871,6 +985,48 @@ void handleHvacsAdd() {
   web.send(302, "text/plain", "");
 }
 
+void handleHvacsUpdate() {
+  if (!checkAuth()) { requestAuth(); return; }
+  int idx = web.arg("index").toInt();
+  if (idx < 0 || idx >= config.hvacCount) {
+    web.send(400, "text/plain", "Invalid index");
+    return;
+  }
+  if (config.emitterCount == 0) {
+    web.send(400, "text/plain", "Add an emitter first");
+    return;
+  }
+  String protocol = web.arg("protocol");
+  if (!protocol.length()) {
+    web.send(400, "text/plain", "Missing protocol");
+    return;
+  }
+  if (protocol != "CUSTOM") {
+    decode_type_t proto = strToDecodeType(protocol.c_str());
+    if (!IRac::isProtocolSupported(proto)) {
+      web.send(400, "text/plain", "Unsupported protocol");
+      return;
+    }
+  }
+  int emitterIndex = web.arg("emitter").toInt();
+  if (emitterIndex < 0 || emitterIndex >= config.emitterCount) {
+    web.send(400, "text/plain", "Invalid emitter");
+    return;
+  }
+  int model = web.arg("model").toInt();
+  HvacConfig &h = config.hvacs[idx];
+  h.protocol = protocol;
+  h.emitterIndex = emitterIndex;
+  h.model = model;
+  h.isCustom = (protocol == "CUSTOM");
+  resetHvacRuntimeState(static_cast<uint8_t>(idx));
+  saveConfig();
+  Serial.print("web: hvac updated index ");
+  Serial.println(idx);
+  web.sendHeader("Location", "/hvacs");
+  web.send(302, "text/plain", "");
+}
+
 void handleHvacsDelete() {
   if (!checkAuth()) { requestAuth(); return; }
   int idx = web.arg("index").toInt();
@@ -901,8 +1057,10 @@ void handleHvacTestPage() {
     html += "<div class='grid'>";
     html += "<div><label>HVAC</label><select name='id'>";
     for (uint8_t i = 0; i < config.hvacCount; i++) {
-      html += "<option value='" + htmlEscape(config.hvacs[i].id) + "'>" + htmlEscape(config.hvacs[i].id) +
-              " (" + htmlEscape(config.hvacs[i].protocol) + ")</option>";
+      ensureHvacStateInitialized(i);
+      String lightValue = hvacStates[i].light ? "true" : "false";
+      html += "<option value='" + htmlEscape(config.hvacs[i].id) + "' data-light='" + lightValue + "'>" +
+              htmlEscape(config.hvacs[i].id) + " (" + htmlEscape(config.hvacs[i].protocol) + ")</option>";
     }
     html += "</select></div>";
     html += "<div><label>Power</label><select name='power'><option value='on'>on</option><option value='off'>off</option></select></div>";
@@ -911,7 +1069,8 @@ void handleHvacTestPage() {
     html += "<div><label>Fan</label><select name='fan'><option>auto</option><option>low</option><option>medium</option><option>high</option></select></div>";
     html += "<div><label>Swing V</label><select name='swingv'><option>off</option><option>auto</option><option>low</option><option>middle</option><option>high</option></select></div>";
     html += "<div><label>Swing H</label><select name='swingh'><option>off</option><option>auto</option><option>left</option><option>middle</option><option>right</option></select></div>";
-    html += "<div><label>Encoding (custom)</label><select name='encoding'><option value=''>default</option><option value='pronto'>pronto</option><option value='gc'>gc</option></select></div>";
+    html += "<div><label>Light</label><select name='light'><option value=''>default</option><option value='true'>on</option><option value='false'>off</option></select></div>";
+    html += "<div><label>Encoding (custom)</label><select name='encoding'><option value=''>default</option><option value='pronto'>pronto</option><option value='gc'>gc</option><option value='racepoint'>racepoint</option></select></div>";
     html += "<div><label>Custom code (optional)</label><input name='code' placeholder='pronto/gc code'></div>";
     html += "</div>";
     html += "<button type='submit'>Send Test</button></form>";
@@ -922,7 +1081,7 @@ void handleHvacTestPage() {
   html += "<form id='rawForm'>";
   html += "<div class='grid'>";
   html += "<div><label>Emitter</label><select name='emitter'>" + emitterOptionsHtml(0) + "</select></div>";
-  html += "<div><label>Encoding</label><select name='encoding'><option value='pronto'>pronto</option><option value='gc'>gc</option></select></div>";
+  html += "<div><label>Encoding</label><select name='encoding'><option value='pronto'>pronto</option><option value='gc'>gc</option><option value='racepoint'>racepoint</option></select></div>";
   html += "<div><label>Code</label><input name='code' placeholder='0000,0067,...'></div>";
   html += "</div>";
   html += "<button type='submit'>Send Raw</button></form>";
@@ -931,9 +1090,14 @@ void handleHvacTestPage() {
   html += "const form=document.getElementById('testForm');";
   html += "const preview=document.getElementById('jsonPreview');";
   html += "const response=document.getElementById('jsonResponse');";
+  html += "const hvacSelect=form?form.querySelector(\"select[name='id']\"):null;";
+  html += "const lightSelect=form?form.querySelector(\"select[name='light']\"):null;";
+  html += "const syncLight=()=>{if(!hvacSelect||!lightSelect)return;const opt=hvacSelect.selectedOptions[0];";
+  html += "if(!opt)return;const val=opt.dataset.light;if(val==='true'||val==='false'){lightSelect.value=val;}else{lightSelect.value='';}};";
   html += "const update=()=>{if(!form)return;const data={cmd:'send'};const fd=new FormData(form);";
   html += "for(const [k,v] of fd.entries()){if(v==='')continue;data[k]=v;}preview.textContent=JSON.stringify(data,null,2);};";
-  html += "if(form){form.addEventListener('input',update);update();";
+  html += "if(hvacSelect){hvacSelect.addEventListener('change',()=>{syncLight();update();});}";
+  html += "if(form){form.addEventListener('input',update);syncLight();update();";
   html += "form.addEventListener('submit',async(e)=>{e.preventDefault();response.textContent='Sending...';";
   html += "const fd=new FormData(form);const params=new URLSearchParams(fd);";
   html += "const res=await fetch('/hvacs/test',{method:'POST',body:params});";
@@ -1090,6 +1254,7 @@ bool processCommand(JsonDocument &doc, JsonDocument &resp, int8_t sourceTelnetSl
     examples.add("{\"cmd\":\"get_all\"}");
     examples.add("{\"cmd\":\"raw\",\"emitter\":0,\"encoding\":\"pronto\",\"code\":\"0000 006D 0000 ...\"}");
     examples.add("{\"cmd\":\"raw\",\"emitter\":0,\"encoding\":\"gc\",\"code\":\"sendir,1:1,1,38000,1,1,172,172,...\"}");
+    examples.add("{\"cmd\":\"raw\",\"emitter\":0,\"encoding\":\"racepoint\",\"code\":\"0000000000009470...\"}");
     return true;
   }
 
@@ -1197,11 +1362,20 @@ bool processCommand(JsonDocument &doc, JsonDocument &resp, int8_t sourceTelnetSl
     String modeStr = normalizeMode(doc["mode"] | nextState.mode);
     String fanStr = normalizeFan(doc["fan"] | nextState.fan);
     float temp = doc["temp"] | nextState.setpoint;
+    bool light = previous.light;
+    if (!doc["light"].isNull()) {
+      if (doc["light"].is<bool>()) {
+        light = doc["light"].as<bool>();
+      } else {
+        light = IRac::strToBool((const char*)(doc["light"] | (light ? "true" : "false")));
+      }
+    }
     nextState.initialized = true;
     nextState.power = power;
     nextState.mode = power ? modeStr : "off";
     nextState.setpoint = temp;
     nextState.fan = fanStr;
+    nextState.light = light;
     if (hasCurrentTemp) {
       nextState.currentTemp = doc["current_temp"].as<float>();
     } else if (!previous.initialized) {
@@ -1241,7 +1415,14 @@ bool processCommand(JsonDocument &doc, JsonDocument &resp, int8_t sourceTelnetSl
   bool quiet = IRac::strToBool((const char*)(doc["quiet"] | "false"));
   bool turbo = IRac::strToBool((const char*)(doc["turbo"] | "false"));
   bool econo = IRac::strToBool((const char*)(doc["econo"] | "false"));
-  bool light = IRac::strToBool((const char*)(doc["light"] | "false"));
+  bool light = previous.light;
+  if (!doc["light"].isNull()) {
+    if (doc["light"].is<bool>()) {
+      light = doc["light"].as<bool>();
+    } else {
+      light = IRac::strToBool((const char*)(doc["light"] | (light ? "true" : "false")));
+    }
+  }
   bool filter = IRac::strToBool((const char*)(doc["filter"] | "false"));
   bool clean = IRac::strToBool((const char*)(doc["clean"] | "false"));
   bool beep = IRac::strToBool((const char*)(doc["beep"] | "false"));
@@ -1254,6 +1435,7 @@ bool processCommand(JsonDocument &doc, JsonDocument &resp, int8_t sourceTelnetSl
   nextState.mode = opmodeToString(mode);
   nextState.setpoint = temp;
   nextState.fan = fanToString(fan);
+  nextState.light = light;
   if (hasCurrentTemp) {
     nextState.currentTemp = doc["current_temp"].as<float>();
   } else if (!previous.initialized) {
@@ -1287,6 +1469,7 @@ void handleHvacTest() {
   if (web.arg("fan").length()) cmd["fan"] = web.arg("fan");
   if (web.arg("swingv").length()) cmd["swingv"] = web.arg("swingv");
   if (web.arg("swingh").length()) cmd["swingh"] = web.arg("swingh");
+  if (web.arg("light").length()) cmd["light"] = web.arg("light");
   if (web.arg("encoding").length()) cmd["encoding"] = web.arg("encoding");
   if (web.arg("code").length()) cmd["code"] = web.arg("code");
 
@@ -1329,6 +1512,7 @@ void setupWeb() {
   web.on("/hvacs/add", HTTP_POST, handleHvacsAdd);
   web.on("/hvacs/test", HTTP_GET, handleHvacTestPage);
   web.on("/hvacs/test", HTTP_POST, handleHvacTest);
+  web.on("/hvacs/update", HTTP_POST, handleHvacsUpdate);
   web.on("/hvacs/delete", HTTP_GET, handleHvacsDelete);
   web.on("/raw/test", HTTP_POST, handleRawTest);
 
@@ -1371,6 +1555,9 @@ bool sendCustomCode(const HvacConfig &hvac, EmitterRuntime *em, const String &co
   }
   if (encoding == "gc") {
     return parseStringAndSendGC(em->raw, code);
+  }
+  if (encoding == "racepoint") {
+    return parseStringAndSendRacepoint(em->raw, code);
   }
   return false;
 }

@@ -1,0 +1,550 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:noNamespaceSchemaLocation="racepoint_component_profile.xsd" manufacturer="Robatto"
+    model="IR_Server" device_class="HVAC_controller" rpm_xml_version="$Revision: 1.0 $" minimum_component_engine_version="0.0">
+    <notes>
+        Absolute Controls DINPLUG HVAC JSON profile
+        Transport: Telnet TCP 4998
+        Command format:
+        {"cmd":"send","id":"1","power":"on","mode":"cool","temp":24,"fan":"auto"}
+
+        Version 1.0: initial JSON HVAC profile with optimistic state updates.
+        Version 1.1: added JSON state feedback parsing by id for per-zone UI updates.
+        Version 2.0: add 8 Racepoint IR outputs mapped to emitters 0-7.
+
+        IR output mapping:
+        IR 1 -> emitter 0
+        IR 2 -> emitter 1
+        IR 3 -> emitter 2
+        IR 4 -> emitter 3
+        IR 5 -> emitter 4
+        IR 6 -> emitter 5
+        IR 7 -> emitter 6
+        IR 8 -> emitter 7
+    </notes>
+
+    <device_control_interfaces>
+        <ir name_on_component="IR 1" connector_type="ir_control_captive_screw"/>
+        <ir name_on_component="IR 2" connector_type="ir_control_captive_screw"/>
+        <ir name_on_component="IR 3" connector_type="ir_control_captive_screw"/>
+        <ir name_on_component="IR 4" connector_type="ir_control_captive_screw"/>
+        <ir name_on_component="IR 5" connector_type="ir_control_captive_screw"/>
+        <ir name_on_component="IR 6" connector_type="ir_control_captive_screw"/>
+        <ir name_on_component="IR 7" connector_type="ir_control_captive_screw"/>
+        <ir name_on_component="IR 8" connector_type="ir_control_captive_screw"/>
+    </device_control_interfaces>
+
+    <control_interfaces preferred="ip">
+        <ip port="4998" protocol="tcp" response_time_length_ms="500" name_on_component="Ethernet">
+            <send_postfix type="hex">0D0A</send_postfix>
+            <receive_end_condition test_condition="data" type="hex">0A</receive_end_condition>
+        </ip>
+    </control_interfaces>
+
+    <media_interfaces>
+        <data name_on_component="Ethernet">
+            <combined_media>
+                <data_media type="ethernet"/>
+                <control port="4998"/>
+            </combined_media>
+        </data>
+        <internal name_on_component="HVAC Controller">
+            <environmental_media/>
+            <resource resource_type="ENV_SINGLE_SETPOINT_HVACCONTROLLER_SOURCE"/>
+        </internal>
+    </media_interfaces>
+
+    <state_variable_list>
+        <state_variable name="Current_Set_Point_Setting" min_value="16" max_value="32" owning_logical_component="HVAC_controller" state_center_type="string" state_center_binding="ThermostatCurrentSetPoint">24</state_variable>
+        <state_variable name="ThermostatCurrentSetPoint" min_value="16" max_value="32" owning_logical_component="HVAC_controller" state_center_type="string" state_center_binding="ThermostatCurrentSetPoint">24</state_variable>
+        <state_variable name="ThermostatCurrentTemperature" min_value="16" max_value="32" owning_logical_component="HVAC_controller" state_center_type="string" state_center_binding="ThermostatCurrentTemperature">24</state_variable>
+        <state_variable name="IsCurrentHVACModeHeat" owning_logical_component="HVAC_controller" state_center_type="boolean" state_center_binding="IsCurrentHVACModeHeat">false</state_variable>
+        <state_variable name="IsCurrentHVACModeCool" owning_logical_component="HVAC_controller" state_center_type="boolean" state_center_binding="IsCurrentHVACModeCool">true</state_variable>
+        <state_variable name="IsCurrentHVACModeAuto" owning_logical_component="HVAC_controller" state_center_type="boolean" state_center_binding="IsCurrentHVACModeAuto">false</state_variable>
+        <state_variable name="IsCurrentHVACModeOff" owning_logical_component="HVAC_controller" state_center_type="boolean" state_center_binding="IsCurrentHVACModeOff">false</state_variable>
+        <state_variable name="IsThermostatCurrentFanModeOn" owning_logical_component="HVAC_controller" state_center_type="boolean" state_center_binding="IsThermostatCurrentFanModeOn">false</state_variable>
+        <state_variable name="Current_Power_State" owning_logical_component="HVAC_controller" state_center_type="string" state_center_binding="CurrentPowerState">on</state_variable>
+        <state_variable name="Current_Mode_State" owning_logical_component="HVAC_controller" state_center_type="string" state_center_binding="CurrentModeState">cool</state_variable>
+        <state_variable name="Current_Fan_State" owning_logical_component="HVAC_controller" state_center_type="string" state_center_binding="CurrentFanState">auto</state_variable>
+        <state_variable name="Current_Light_State" owning_logical_component="HVAC_controller" state_center_type="string" state_center_binding="CurrentLightState">off</state_variable>
+        <state_variable name="ThermostatCurrentFanModeIsLow" owning_logical_component="HVAC_controller" state_center_type="boolean" state_center_binding="ThermostatCurrentFanModeIsLow">false</state_variable>
+        <state_variable name="ThermostatCurrentFanModeIsMed" owning_logical_component="HVAC_controller" state_center_type="boolean" state_center_binding="ThermostatCurrentFanModeIsMed">false</state_variable>
+        <state_variable name="ThermostatCurrentFanModeIsHigh" owning_logical_component="HVAC_controller" state_center_type="boolean" state_center_binding="ThermostatCurrentFanModeIsHigh">false</state_variable>
+        <state_variable name="ThermostatCurrentFanModeIsAuto" owning_logical_component="HVAC_controller" state_center_type="boolean" state_center_binding="ThermostatCurrentFanModeIsAuto">true</state_variable>
+    </state_variable_list>
+
+    <logical_component logical_component_name="HVAC_controller">
+        <implementation>
+            <internal name_on_component="HVAC Controller"/>
+        </implementation>
+
+        <custom_component_actions>
+            <action name="SendIR1">
+                <action_argument name="IRCode" note="Racepoint hex code"/>
+                <command_interface interface="ip">
+                    <command response_required="no" partial_response="no">
+                        <command_string type="character">{"cmd":"raw","emitter":0,"encoding":"racepoint","code":"</command_string>
+                        <parameter_list>
+                            <parameter parameter_data_type="character" action_argument="IRCode"/>
+                            <parameter parameter_data_type="character">"}</parameter>
+                        </parameter_list>
+                        <delay ms_delay="100"/>
+                    </command>
+                </command_interface>
+            </action>
+            <action name="SendIR2">
+                <action_argument name="IRCode" note="Racepoint hex code"/>
+                <command_interface interface="ip">
+                    <command response_required="no" partial_response="no">
+                        <command_string type="character">{"cmd":"raw","emitter":1,"encoding":"racepoint","code":"</command_string>
+                        <parameter_list>
+                            <parameter parameter_data_type="character" action_argument="IRCode"/>
+                            <parameter parameter_data_type="character">"}</parameter>
+                        </parameter_list>
+                        <delay ms_delay="100"/>
+                    </command>
+                </command_interface>
+            </action>
+            <action name="SendIR3">
+                <action_argument name="IRCode" note="Racepoint hex code"/>
+                <command_interface interface="ip">
+                    <command response_required="no" partial_response="no">
+                        <command_string type="character">{"cmd":"raw","emitter":2,"encoding":"racepoint","code":"</command_string>
+                        <parameter_list>
+                            <parameter parameter_data_type="character" action_argument="IRCode"/>
+                            <parameter parameter_data_type="character">"}</parameter>
+                        </parameter_list>
+                        <delay ms_delay="100"/>
+                    </command>
+                </command_interface>
+            </action>
+            <action name="SendIR4">
+                <action_argument name="IRCode" note="Racepoint hex code"/>
+                <command_interface interface="ip">
+                    <command response_required="no" partial_response="no">
+                        <command_string type="character">{"cmd":"raw","emitter":3,"encoding":"racepoint","code":"</command_string>
+                        <parameter_list>
+                            <parameter parameter_data_type="character" action_argument="IRCode"/>
+                            <parameter parameter_data_type="character">"}</parameter>
+                        </parameter_list>
+                        <delay ms_delay="100"/>
+                    </command>
+                </command_interface>
+            </action>
+            <action name="SendIR5">
+                <action_argument name="IRCode" note="Racepoint hex code"/>
+                <command_interface interface="ip">
+                    <command response_required="no" partial_response="no">
+                        <command_string type="character">{"cmd":"raw","emitter":4,"encoding":"racepoint","code":"</command_string>
+                        <parameter_list>
+                            <parameter parameter_data_type="character" action_argument="IRCode"/>
+                            <parameter parameter_data_type="character">"}</parameter>
+                        </parameter_list>
+                        <delay ms_delay="100"/>
+                    </command>
+                </command_interface>
+            </action>
+            <action name="SendIR6">
+                <action_argument name="IRCode" note="Racepoint hex code"/>
+                <command_interface interface="ip">
+                    <command response_required="no" partial_response="no">
+                        <command_string type="character">{"cmd":"raw","emitter":5,"encoding":"racepoint","code":"</command_string>
+                        <parameter_list>
+                            <parameter parameter_data_type="character" action_argument="IRCode"/>
+                            <parameter parameter_data_type="character">"}</parameter>
+                        </parameter_list>
+                        <delay ms_delay="100"/>
+                    </command>
+                </command_interface>
+            </action>
+            <action name="SendIR7">
+                <action_argument name="IRCode" note="Racepoint hex code"/>
+                <command_interface interface="ip">
+                    <command response_required="no" partial_response="no">
+                        <command_string type="character">{"cmd":"raw","emitter":6,"encoding":"racepoint","code":"</command_string>
+                        <parameter_list>
+                            <parameter parameter_data_type="character" action_argument="IRCode"/>
+                            <parameter parameter_data_type="character">"}</parameter>
+                        </parameter_list>
+                        <delay ms_delay="100"/>
+                    </command>
+                </command_interface>
+            </action>
+            <action name="SendIR8">
+                <action_argument name="IRCode" note="Racepoint hex code"/>
+                <command_interface interface="ip">
+                    <command response_required="no" partial_response="no">
+                        <command_string type="character">{"cmd":"raw","emitter":7,"encoding":"racepoint","code":"</command_string>
+                        <parameter_list>
+                            <parameter parameter_data_type="character" action_argument="IRCode"/>
+                            <parameter parameter_data_type="character">"}</parameter>
+                        </parameter_list>
+                        <delay ms_delay="100"/>
+                    </command>
+                </command_interface>
+            </action>
+        </custom_component_actions>
+
+        <status_messages>
+            <status_message name="ThermostatStateJson">
+                <constant type="character">{"type":"state","id":"</constant>
+                <data type="character" terminator_type="character" terminator="&quot;">
+                    <update state="ThermostatAddress" type="string"/>
+                </data>
+                <constant type="character">,"power":"</constant>
+                <data type="character" terminator_type="character" terminator="&quot;">
+                    <update state="Current_Power_State" type="string"/>
+                    <data_map match_required="no">
+                        <map key="on">
+                            <update state="IsCurrentHVACModeOff" type="boolean">false</update>
+                        </map>
+                        <map key="off">
+                            <update state="IsCurrentHVACModeHeat" type="boolean">false</update>
+                            <update state="IsCurrentHVACModeCool" type="boolean">false</update>
+                            <update state="IsCurrentHVACModeAuto" type="boolean">false</update>
+                            <update state="IsCurrentHVACModeOff" type="boolean">true</update>
+                        </map>
+                    </data_map>
+                </data>
+                <constant type="character">,"mode":"</constant>
+                <data type="character" terminator_type="character" terminator="&quot;">
+                    <update state="Current_Mode_State" type="string"/>
+                    <data_map match_required="no">
+                        <map key="cool">
+                            <update state="IsCurrentHVACModeHeat" type="boolean">false</update>
+                            <update state="IsCurrentHVACModeCool" type="boolean">true</update>
+                            <update state="IsCurrentHVACModeAuto" type="boolean">false</update>
+                            <update state="IsCurrentHVACModeOff" type="boolean">false</update>
+                        </map>
+                        <map key="heat">
+                            <update state="IsCurrentHVACModeHeat" type="boolean">true</update>
+                            <update state="IsCurrentHVACModeCool" type="boolean">false</update>
+                            <update state="IsCurrentHVACModeAuto" type="boolean">false</update>
+                            <update state="IsCurrentHVACModeOff" type="boolean">false</update>
+                        </map>
+                        <map key="off">
+                            <update state="IsCurrentHVACModeHeat" type="boolean">false</update>
+                            <update state="IsCurrentHVACModeCool" type="boolean">false</update>
+                            <update state="IsCurrentHVACModeAuto" type="boolean">false</update>
+                            <update state="IsCurrentHVACModeOff" type="boolean">true</update>
+                        </map>
+                        <map key="auto">
+                            <update state="IsCurrentHVACModeHeat" type="boolean">false</update>
+                            <update state="IsCurrentHVACModeCool" type="boolean">false</update>
+                            <update state="IsCurrentHVACModeAuto" type="boolean">true</update>
+                            <update state="IsCurrentHVACModeOff" type="boolean">false</update>
+                        </map>
+                    </data_map>
+                </data>
+                <constant type="character">,"setpoint":</constant>
+                <data type="character" terminator_type="character" terminator=",">
+                    <update state="Current_Set_Point_Setting" type="string"/>
+                    <update state="ThermostatCurrentSetPoint" type="string"/>
+                </data>
+                <constant type="character">"current_temp":</constant>
+                <data type="character" terminator_type="character" terminator=",">
+                    <update state="ThermostatCurrentTemperature" type="string"/>
+                </data>
+                <constant type="character">"fan":"</constant>
+                <data type="character" terminator_type="character" terminator="&quot;">
+                    <update state="Current_Fan_State" type="string"/>
+                    <data_map match_required="no">
+                        <map key="high">
+                            <update state="ThermostatCurrentFanModeIsLow" type="boolean">false</update>
+                            <update state="ThermostatCurrentFanModeIsMed" type="boolean">false</update>
+                            <update state="ThermostatCurrentFanModeIsHigh" type="boolean">true</update>
+                            <update state="ThermostatCurrentFanModeIsAuto" type="boolean">false</update>
+                            <update state="IsThermostatCurrentFanModeOn" type="boolean">false</update>
+                        </map>
+                        <map key="mid">
+                            <update state="ThermostatCurrentFanModeIsLow" type="boolean">false</update>
+                            <update state="ThermostatCurrentFanModeIsMed" type="boolean">true</update>
+                            <update state="ThermostatCurrentFanModeIsHigh" type="boolean">false</update>
+                            <update state="ThermostatCurrentFanModeIsAuto" type="boolean">false</update>
+                            <update state="IsThermostatCurrentFanModeOn" type="boolean">false</update>
+                        </map>
+                        <map key="medium">
+                            <update state="ThermostatCurrentFanModeIsLow" type="boolean">false</update>
+                            <update state="ThermostatCurrentFanModeIsMed" type="boolean">true</update>
+                            <update state="ThermostatCurrentFanModeIsHigh" type="boolean">false</update>
+                            <update state="ThermostatCurrentFanModeIsAuto" type="boolean">false</update>
+                            <update state="IsThermostatCurrentFanModeOn" type="boolean">false</update>
+                        </map>
+                        <map key="low">
+                            <update state="ThermostatCurrentFanModeIsLow" type="boolean">true</update>
+                            <update state="ThermostatCurrentFanModeIsMed" type="boolean">false</update>
+                            <update state="ThermostatCurrentFanModeIsHigh" type="boolean">false</update>
+                            <update state="ThermostatCurrentFanModeIsAuto" type="boolean">false</update>
+                            <update state="IsThermostatCurrentFanModeOn" type="boolean">false</update>
+                        </map>
+                        <map key="min">
+                            <update state="ThermostatCurrentFanModeIsLow" type="boolean">true</update>
+                            <update state="ThermostatCurrentFanModeIsMed" type="boolean">false</update>
+                            <update state="ThermostatCurrentFanModeIsHigh" type="boolean">false</update>
+                            <update state="ThermostatCurrentFanModeIsAuto" type="boolean">false</update>
+                            <update state="IsThermostatCurrentFanModeOn" type="boolean">false</update>
+                        </map>
+                        <map key="max">
+                            <update state="ThermostatCurrentFanModeIsLow" type="boolean">false</update>
+                            <update state="ThermostatCurrentFanModeIsMed" type="boolean">false</update>
+                            <update state="ThermostatCurrentFanModeIsHigh" type="boolean">true</update>
+                            <update state="ThermostatCurrentFanModeIsAuto" type="boolean">false</update>
+                            <update state="IsThermostatCurrentFanModeOn" type="boolean">false</update>
+                        </map>
+                        <map key="auto">
+                            <update state="ThermostatCurrentFanModeIsLow" type="boolean">false</update>
+                            <update state="ThermostatCurrentFanModeIsMed" type="boolean">false</update>
+                            <update state="ThermostatCurrentFanModeIsHigh" type="boolean">false</update>
+                            <update state="ThermostatCurrentFanModeIsAuto" type="boolean">true</update>
+                            <update state="IsThermostatCurrentFanModeOn" type="boolean">false</update>
+                        </map>
+                        <map key="on">
+                            <update state="ThermostatCurrentFanModeIsLow" type="boolean">false</update>
+                            <update state="ThermostatCurrentFanModeIsMed" type="boolean">false</update>
+                            <update state="ThermostatCurrentFanModeIsHigh" type="boolean">false</update>
+                            <update state="ThermostatCurrentFanModeIsAuto" type="boolean">false</update>
+                            <update state="IsThermostatCurrentFanModeOn" type="boolean">true</update>
+                        </map>
+                    </data_map>
+                </data>
+                <constant type="character">,"light":"</constant>
+                <data type="character" terminator_type="character" terminator="&quot;">
+                    <update state="Current_Light_State" type="string"/>
+                </data>
+                <constant type="character">}</constant>
+                <append_data_to_state_names state="ThermostatAddress" note="'1' - '999999'"/>
+            </status_message>
+        </status_messages>
+
+        <resource_component_actions resource_type="ENV_SINGLE_SETPOINT_HVACCONTROLLER_SOURCE">
+            <action name="SetSingleSetPointTemperature">
+                <action_argument name="ThermostatAddress" note="DEVICE_ID (mapped to JSON id)"/>
+                <action_argument name="ThermostatAddress2" note="not used"/>
+                <action_argument name="SetPointTemperature" note="Select the Temperature Point 16 - 32 Celsius"/>
+                <update_state_variable name="Current_Set_Point_Setting" update_type="set" update_source="action_argument">SetPointTemperature</update_state_variable>
+                <update_state_variable name="ThermostatCurrentSetPoint" update_type="set" update_source="action_argument">SetPointTemperature</update_state_variable>
+                <update_state_variable name="ThermostatCurrentTemperature" update_type="set" update_source="action_argument">SetPointTemperature</update_state_variable>
+                <update_state_variable name="Current_Power_State" update_type="set" update_source="constant">on</update_state_variable>
+                <command_interface interface="ip">
+                    <command response_required="no" partial_response="no">
+                        <command_string type="character">{"cmd":"send","id":"</command_string>
+                        <parameter_list>
+                            <parameter parameter_data_type="character" action_argument="ThermostatAddress"/>
+                            <parameter parameter_data_type="character">","power":"</parameter>
+                            <parameter parameter_data_type="character" state_variable="Current_Power_State"/>
+                            <parameter parameter_data_type="character">","mode":"</parameter>
+                            <parameter parameter_data_type="character" state_variable="Current_Mode_State"/>
+                            <parameter parameter_data_type="character">","temp":</parameter>
+                            <parameter parameter_data_type="character" state_variable="Current_Set_Point_Setting"/>
+                            <parameter parameter_data_type="character">,"fan":"</parameter>
+                            <parameter parameter_data_type="character" state_variable="Current_Fan_State"/>
+                            <parameter parameter_data_type="character">"}</parameter>
+                        </parameter_list>
+                        <delay ms_delay="100"/>
+                    </command>
+                </command_interface>
+            </action>
+
+            <action name="SetHVACModeHeat">
+                <action_argument name="ThermostatAddress" note="DEVICE_ID (mapped to JSON id)"/>
+                <action_argument name="ThermostatAddress2" note="not used"/>
+                <update_state_variable name="IsCurrentHVACModeHeat" update_type="set" update_source="constant">true</update_state_variable>
+                <update_state_variable name="IsCurrentHVACModeCool" update_type="set" update_source="constant">false</update_state_variable>
+                <update_state_variable name="IsCurrentHVACModeOff" update_type="set" update_source="constant">false</update_state_variable>
+                <update_state_variable name="Current_Power_State" update_type="set" update_source="constant">on</update_state_variable>
+                <update_state_variable name="Current_Mode_State" update_type="set" update_source="constant">heat</update_state_variable>
+                <command_interface interface="ip">
+                    <command response_required="no" partial_response="no">
+                        <command_string type="character">{"cmd":"send","id":"</command_string>
+                        <parameter_list>
+                            <parameter parameter_data_type="character" action_argument="ThermostatAddress"/>
+                            <parameter parameter_data_type="character">","power":"</parameter>
+                            <parameter parameter_data_type="character" state_variable="Current_Power_State"/>
+                            <parameter parameter_data_type="character">","mode":"</parameter>
+                            <parameter parameter_data_type="character" state_variable="Current_Mode_State"/>
+                            <parameter parameter_data_type="character">","temp":</parameter>
+                            <parameter parameter_data_type="character" state_variable="Current_Set_Point_Setting"/>
+                            <parameter parameter_data_type="character">,"fan":"</parameter>
+                            <parameter parameter_data_type="character" state_variable="Current_Fan_State"/>
+                            <parameter parameter_data_type="character">"}</parameter>
+                        </parameter_list>
+                        <delay ms_delay="100"/>
+                    </command>
+                </command_interface>
+            </action>
+
+            <action name="SetHVACModeCool">
+                <action_argument name="ThermostatAddress" note="DEVICE_ID (mapped to JSON id)"/>
+                <action_argument name="ThermostatAddress2" note="not used"/>
+                <update_state_variable name="IsCurrentHVACModeHeat" update_type="set" update_source="constant">false</update_state_variable>
+                <update_state_variable name="IsCurrentHVACModeCool" update_type="set" update_source="constant">true</update_state_variable>
+                <update_state_variable name="IsCurrentHVACModeOff" update_type="set" update_source="constant">false</update_state_variable>
+                <update_state_variable name="Current_Power_State" update_type="set" update_source="constant">on</update_state_variable>
+                <update_state_variable name="Current_Mode_State" update_type="set" update_source="constant">cool</update_state_variable>
+                <command_interface interface="ip">
+                    <command response_required="no" partial_response="no">
+                        <command_string type="character">{"cmd":"send","id":"</command_string>
+                        <parameter_list>
+                            <parameter parameter_data_type="character" action_argument="ThermostatAddress"/>
+                            <parameter parameter_data_type="character">","power":"</parameter>
+                            <parameter parameter_data_type="character" state_variable="Current_Power_State"/>
+                            <parameter parameter_data_type="character">","mode":"</parameter>
+                            <parameter parameter_data_type="character" state_variable="Current_Mode_State"/>
+                            <parameter parameter_data_type="character">","temp":</parameter>
+                            <parameter parameter_data_type="character" state_variable="Current_Set_Point_Setting"/>
+                            <parameter parameter_data_type="character">,"fan":"</parameter>
+                            <parameter parameter_data_type="character" state_variable="Current_Fan_State"/>
+                            <parameter parameter_data_type="character">"}</parameter>
+                        </parameter_list>
+                        <delay ms_delay="100"/>
+                    </command>
+                </command_interface>
+            </action>
+
+            <action name="SetHVACModeOff">
+                <action_argument name="ThermostatAddress" note="DEVICE_ID (mapped to JSON id)"/>
+                <action_argument name="ThermostatAddress2" note="not used"/>
+                <update_state_variable name="IsCurrentHVACModeHeat" update_type="set" update_source="constant">false</update_state_variable>
+                <update_state_variable name="IsCurrentHVACModeCool" update_type="set" update_source="constant">false</update_state_variable>
+                <update_state_variable name="IsCurrentHVACModeOff" update_type="set" update_source="constant">true</update_state_variable>
+                <update_state_variable name="Current_Power_State" update_type="set" update_source="constant">off</update_state_variable>
+                <command_interface interface="ip">
+                    <command response_required="no" partial_response="no">
+                        <command_string type="character">{"cmd":"send","id":"</command_string>
+                        <parameter_list>
+                            <parameter parameter_data_type="character" action_argument="ThermostatAddress"/>
+                            <parameter parameter_data_type="character">","power":"</parameter>
+                            <parameter parameter_data_type="character" state_variable="Current_Power_State"/>
+                            <parameter parameter_data_type="character">","mode":"</parameter>
+                            <parameter parameter_data_type="character" state_variable="Current_Mode_State"/>
+                            <parameter parameter_data_type="character">","temp":</parameter>
+                            <parameter parameter_data_type="character" state_variable="Current_Set_Point_Setting"/>
+                            <parameter parameter_data_type="character">,"fan":"</parameter>
+                            <parameter parameter_data_type="character" state_variable="Current_Fan_State"/>
+                            <parameter parameter_data_type="character">"}</parameter>
+                        </parameter_list>
+                        <delay ms_delay="100"/>
+                    </command>
+                </command_interface>
+            </action>
+
+            <action name="SetFanSpeedHigh">
+                <action_argument name="ThermostatAddress" note="DEVICE_ID (mapped to JSON id)"/>
+                <action_argument name="ThermostatAddress2" note="not used"/>
+                <update_state_variable name="Current_Fan_State" update_type="set" update_source="constant">high</update_state_variable>
+                <update_state_variable name="ThermostatCurrentFanModeIsLow" update_type="set" update_source="constant">false</update_state_variable>
+                <update_state_variable name="ThermostatCurrentFanModeIsMed" update_type="set" update_source="constant">false</update_state_variable>
+                <update_state_variable name="ThermostatCurrentFanModeIsHigh" update_type="set" update_source="constant">true</update_state_variable>
+                <update_state_variable name="ThermostatCurrentFanModeIsAuto" update_type="set" update_source="constant">false</update_state_variable>
+                <command_interface interface="ip">
+                    <command response_required="no" partial_response="no">
+                        <command_string type="character">{"cmd":"send","id":"</command_string>
+                        <parameter_list>
+                            <parameter parameter_data_type="character" action_argument="ThermostatAddress"/>
+                            <parameter parameter_data_type="character">","power":"</parameter>
+                            <parameter parameter_data_type="character" state_variable="Current_Power_State"/>
+                            <parameter parameter_data_type="character">","mode":"</parameter>
+                            <parameter parameter_data_type="character" state_variable="Current_Mode_State"/>
+                            <parameter parameter_data_type="character">","temp":</parameter>
+                            <parameter parameter_data_type="character" state_variable="Current_Set_Point_Setting"/>
+                            <parameter parameter_data_type="character">,"fan":"</parameter>
+                            <parameter parameter_data_type="character" state_variable="Current_Fan_State"/>
+                            <parameter parameter_data_type="character">"}</parameter>
+                        </parameter_list>
+                        <delay ms_delay="100"/>
+                    </command>
+                </command_interface>
+            </action>
+
+            <action name="SetFanSpeedMid">
+                <action_argument name="ThermostatAddress" note="DEVICE_ID (mapped to JSON id)"/>
+                <action_argument name="ThermostatAddress2" note="not used"/>
+                <update_state_variable name="Current_Fan_State" update_type="set" update_source="constant">medium</update_state_variable>
+                <update_state_variable name="ThermostatCurrentFanModeIsLow" update_type="set" update_source="constant">false</update_state_variable>
+                <update_state_variable name="ThermostatCurrentFanModeIsMed" update_type="set" update_source="constant">true</update_state_variable>
+                <update_state_variable name="ThermostatCurrentFanModeIsHigh" update_type="set" update_source="constant">false</update_state_variable>
+                <update_state_variable name="ThermostatCurrentFanModeIsAuto" update_type="set" update_source="constant">false</update_state_variable>
+                <command_interface interface="ip">
+                    <command response_required="no" partial_response="no">
+                        <command_string type="character">{"cmd":"send","id":"</command_string>
+                        <parameter_list>
+                            <parameter parameter_data_type="character" action_argument="ThermostatAddress"/>
+                            <parameter parameter_data_type="character">","power":"</parameter>
+                            <parameter parameter_data_type="character" state_variable="Current_Power_State"/>
+                            <parameter parameter_data_type="character">","mode":"</parameter>
+                            <parameter parameter_data_type="character" state_variable="Current_Mode_State"/>
+                            <parameter parameter_data_type="character">","temp":</parameter>
+                            <parameter parameter_data_type="character" state_variable="Current_Set_Point_Setting"/>
+                            <parameter parameter_data_type="character">,"fan":"</parameter>
+                            <parameter parameter_data_type="character" state_variable="Current_Fan_State"/>
+                            <parameter parameter_data_type="character">"}</parameter>
+                        </parameter_list>
+                        <delay ms_delay="100"/>
+                    </command>
+                </command_interface>
+            </action>
+
+            <action name="SetFanSpeedLow">
+                <action_argument name="ThermostatAddress" note="DEVICE_ID (mapped to JSON id)"/>
+                <action_argument name="ThermostatAddress2" note="not used"/>
+                <update_state_variable name="Current_Fan_State" update_type="set" update_source="constant">low</update_state_variable>
+                <update_state_variable name="ThermostatCurrentFanModeIsLow" update_type="set" update_source="constant">true</update_state_variable>
+                <update_state_variable name="ThermostatCurrentFanModeIsMed" update_type="set" update_source="constant">false</update_state_variable>
+                <update_state_variable name="ThermostatCurrentFanModeIsHigh" update_type="set" update_source="constant">false</update_state_variable>
+                <update_state_variable name="ThermostatCurrentFanModeIsAuto" update_type="set" update_source="constant">false</update_state_variable>
+                <command_interface interface="ip">
+                    <command response_required="no" partial_response="no">
+                        <command_string type="character">{"cmd":"send","id":"</command_string>
+                        <parameter_list>
+                            <parameter parameter_data_type="character" action_argument="ThermostatAddress"/>
+                            <parameter parameter_data_type="character">","power":"</parameter>
+                            <parameter parameter_data_type="character" state_variable="Current_Power_State"/>
+                            <parameter parameter_data_type="character">","mode":"</parameter>
+                            <parameter parameter_data_type="character" state_variable="Current_Mode_State"/>
+                            <parameter parameter_data_type="character">","temp":</parameter>
+                            <parameter parameter_data_type="character" state_variable="Current_Set_Point_Setting"/>
+                            <parameter parameter_data_type="character">,"fan":"</parameter>
+                            <parameter parameter_data_type="character" state_variable="Current_Fan_State"/>
+                            <parameter parameter_data_type="character">"}</parameter>
+                        </parameter_list>
+                        <delay ms_delay="100"/>
+                    </command>
+                </command_interface>
+            </action>
+
+            <action name="SetFanSpeedAuto">
+                <action_argument name="ThermostatAddress" note="DEVICE_ID (mapped to JSON id)"/>
+                <action_argument name="ThermostatAddress2" note="not used"/>
+                <update_state_variable name="Current_Fan_State" update_type="set" update_source="constant">auto</update_state_variable>
+                <update_state_variable name="ThermostatCurrentFanModeIsLow" update_type="set" update_source="constant">false</update_state_variable>
+                <update_state_variable name="ThermostatCurrentFanModeIsMed" update_type="set" update_source="constant">false</update_state_variable>
+                <update_state_variable name="ThermostatCurrentFanModeIsHigh" update_type="set" update_source="constant">false</update_state_variable>
+                <update_state_variable name="ThermostatCurrentFanModeIsAuto" update_type="set" update_source="constant">true</update_state_variable>
+                <command_interface interface="ip">
+                    <command response_required="no" partial_response="no">
+                        <command_string type="character">{"cmd":"send","id":"</command_string>
+                        <parameter_list>
+                            <parameter parameter_data_type="character" action_argument="ThermostatAddress"/>
+                            <parameter parameter_data_type="character">","power":"</parameter>
+                            <parameter parameter_data_type="character" state_variable="Current_Power_State"/>
+                            <parameter parameter_data_type="character">","mode":"</parameter>
+                            <parameter parameter_data_type="character" state_variable="Current_Mode_State"/>
+                            <parameter parameter_data_type="character">","temp":</parameter>
+                            <parameter parameter_data_type="character" state_variable="Current_Set_Point_Setting"/>
+                            <parameter parameter_data_type="character">,"fan":"</parameter>
+                            <parameter parameter_data_type="character" state_variable="Current_Fan_State"/>
+                            <parameter parameter_data_type="character">"}</parameter>
+                        </parameter_list>
+                        <delay ms_delay="100"/>
+                    </command>
+                </command_interface>
+            </action>
+
+            <entity name="Zone" address_components="1">
+                <screen_representation>
+                    <common_unique_identifier name="ThermostatAddress" address_component="1"/>
+                </screen_representation>
+            </entity>
+        </resource_component_actions>
+    </logical_component>
+</component>
