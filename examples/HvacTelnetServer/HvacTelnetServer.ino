@@ -10,6 +10,13 @@
 #include <ArduinoJson.h>
 #include <ArduinoOTA.h>
 #include <Update.h>
+#include <WireGuard-ESP32.h>
+#include <time.h>
+#include <esp_system.h>
+
+extern "C" {
+#include "wireguard.h"
+}
 
 #include <IRremoteESP8266.h>
 #include <IRac.h>
@@ -59,9 +66,19 @@ struct WebConfig {
   String password;
 };
 
+struct WireGuardConfig {
+  bool enabled = false;
+  IPAddress localIp;
+  String privateKey;
+  String peerPublicKey;
+  String endpointHost;
+  uint16_t endpointPort = 51820;
+};
+
 struct Config {
   WifiConfig wifi;
   WebConfig web;
+  WireGuardConfig wg;
   String hostname;
   uint16_t telnetPort = kDefaultTelnetPort;
   uint16_t emitterGpios[kMaxEmitters];
@@ -101,6 +118,13 @@ String serialConsoleBuffer;
 String telnetMonitorLog[kMonitorLogCapacity];
 uint16_t telnetMonitorLogStart = 0;
 uint16_t telnetMonitorLogCount = 0;
+WireGuard wgClient;
+bool wgConnected = false;
+unsigned long wgLastAttemptMs = 0;
+
+static const uint16_t kDefaultWireGuardPort = 51820;
+static const unsigned long kWireGuardRetryIntervalMs = 30000;
+String wgInterfacePublicKey = "";
 
 void initHvacRuntimeStates();
 bool processCommand(JsonDocument &doc, JsonDocument &resp, int8_t sourceTelnetSlot = -1);
@@ -109,6 +133,11 @@ String findCustomTempCode(const HvacConfig &hvac, int tempC);
 void handleSerialConsole();
 void addMonitorLogEntry(const String &line);
 void clearMonitorLog();
+void setupWireGuard();
+void ensureWireGuardConnected();
+bool generateWireGuardPrivateKeyBase64(String &outPrivateKeyB64);
+bool deriveWireGuardPublicKeyBase64(const String &privateKeyB64, String &outPublicKeyB64);
+bool ensureWireGuardKeypair(bool printStatus);
 
 // ---- Helpers ----
 
@@ -415,6 +444,15 @@ String configToJsonString() {
   JsonObject webc = doc["web"].to<JsonObject>();
   webc["password"] = config.web.password;
 
+  JsonObject wg = doc["wireguard"].to<JsonObject>();
+  wg["enabled"] = config.wg.enabled;
+  wg["local_ip"] = config.wg.localIp.toString();
+  wg["private_key"] = config.wg.privateKey;
+  wg["interface_public_key"] = wgInterfacePublicKey;
+  wg["peer_public_key"] = config.wg.peerPublicKey;
+  wg["endpoint_host"] = config.wg.endpointHost;
+  wg["endpoint_port"] = config.wg.endpointPort;
+
   doc["hostname"] = config.hostname.length() ? config.hostname : kDefaultHostname;
   doc["telnet_port"] = config.telnetPort;
 
@@ -469,6 +507,12 @@ void clearConfig() {
   config.wifi.subnet = IPAddress();
   config.wifi.dns = IPAddress();
   config.web.password = "";
+  config.wg.enabled = false;
+  config.wg.localIp = IPAddress();
+  config.wg.privateKey = "";
+  config.wg.peerPublicKey = "";
+  config.wg.endpointHost = "";
+  config.wg.endpointPort = kDefaultWireGuardPort;
   config.hostname = kDefaultHostname;
   config.telnetPort = kDefaultTelnetPort;
   for (uint8_t i = 0; i < kMaxEmitters; i++) {
@@ -529,6 +573,19 @@ void loadConfig() {
   if (!webc.isNull()) {
     config.web.password = webc["password"] | "";
   }
+
+  JsonObject wg = doc["wireguard"];
+  if (!wg.isNull()) {
+    config.wg.enabled = wg["enabled"] | false;
+    config.wg.localIp.fromString(wg["local_ip"] | "");
+    config.wg.privateKey = wg["private_key"] | "";
+    config.wg.peerPublicKey = wg["peer_public_key"] | "";
+    config.wg.endpointHost = wg["endpoint_host"] | "";
+    config.wg.endpointPort = wg["endpoint_port"] | kDefaultWireGuardPort;
+    if (config.wg.endpointPort == 0) config.wg.endpointPort = kDefaultWireGuardPort;
+  }
+  bool generatedWgKey = ensureWireGuardKeypair(false);
+  if (generatedWgKey) saveConfig();
 
   config.hostname = doc["hostname"] | kDefaultHostname;
 
@@ -818,6 +875,10 @@ void handleHome() {
   html += "<p>WiFi mode: <strong>" + String(WiFi.isConnected() ? "STA" : "AP") + "</strong></p>";
   html += "<p>IP: <strong>" + WiFi.localIP().toString() + "</strong></p>";
   html += "<p>Hostname: <strong>" + htmlEscape(config.hostname.length() ? config.hostname : kDefaultHostname) + ".local</strong></p>";
+  html += "<p>WireGuard: <strong>" + String(config.wg.enabled ? (wgConnected ? "connected" : "enabled (not connected)") : "disabled") + "</strong></p>";
+  if (config.wg.enabled && config.wg.localIp != IPAddress()) {
+    html += "<p>WireGuard IP: <strong>" + config.wg.localIp.toString() + "</strong></p>";
+  }
   html += "<p>Emitters: <strong>" + String(config.emitterCount) + "</strong></p>";
   html += "<p>HVACs: <strong>" + String(config.hvacCount) + "</strong></p></div>";
   html += pageFooter();
@@ -853,6 +914,20 @@ void handleConfigPage() {
   html += "<h3>Web Password</h3>";
   html += "<label>Admin password (blank = no auth)</label>";
   html += "<input name='webpass' type='password' value='" + htmlEscape(config.web.password) + "'>";
+  html += "<h3>WireGuard Client</h3>";
+  html += "<div class='row'><input type='checkbox' id='wgEnabled' name='wg_enabled'" +
+          String(config.wg.enabled ? " checked" : "") + "><label for='wgEnabled'>Enable WireGuard client</label></div>";
+  html += "<p>Interface public key: <code>" + htmlEscape(wgInterfacePublicKey.length() ? wgInterfacePublicKey : "(not available)") + "</code></p>";
+  html += "<label>Local tunnel IP</label>";
+  html += "<input name='wg_local_ip' value='" + htmlEscape(config.wg.localIp.toString()) + "' placeholder='10.10.10.2'>";
+  html += "<label>Interface private key</label>";
+  html += "<input name='wg_private_key' type='password' value='" + htmlEscape(config.wg.privateKey) + "' placeholder='base64 private key'>";
+  html += "<label>Peer public key</label>";
+  html += "<input name='wg_peer_public_key' value='" + htmlEscape(config.wg.peerPublicKey) + "' placeholder='base64 peer public key'>";
+  html += "<label>Peer endpoint host/IP</label>";
+  html += "<input name='wg_endpoint_host' value='" + htmlEscape(config.wg.endpointHost) + "' placeholder='vpn.example.com'>";
+  html += "<label>Peer endpoint UDP port</label>";
+  html += "<input name='wg_endpoint_port' type='number' min='1' max='65535' value='" + String(config.wg.endpointPort) + "'>";
   html += "<button type='submit'>Save & Reboot</button>";
   html += "</form></div>";
   html += "<script>";
@@ -885,6 +960,15 @@ void handleConfigSave() {
   config.wifi.subnet.fromString(web.arg("subnet"));
   config.wifi.dns.fromString(web.arg("dns"));
   config.web.password = web.arg("webpass");
+  config.wg.enabled = web.hasArg("wg_enabled");
+  config.wg.localIp.fromString(web.arg("wg_local_ip"));
+  config.wg.privateKey = web.arg("wg_private_key");
+  config.wg.peerPublicKey = web.arg("wg_peer_public_key");
+  config.wg.endpointHost = web.arg("wg_endpoint_host");
+  uint16_t wgPort = web.arg("wg_endpoint_port").toInt();
+  if (wgPort == 0) wgPort = kDefaultWireGuardPort;
+  config.wg.endpointPort = wgPort;
+  ensureWireGuardKeypair(true);
   String hostname = web.arg("hostname");
   hostname.trim();
   if (hostname.length() == 0) hostname = kDefaultHostname;
@@ -1883,6 +1967,118 @@ void startWifi() {
   }
 }
 
+bool generateWireGuardPrivateKeyBase64(String &outPrivateKeyB64) {
+  uint8_t privateKey[WIREGUARD_PRIVATE_KEY_LEN];
+  esp_fill_random(privateKey, sizeof(privateKey));
+  privateKey[0] &= 248;
+  privateKey[31] &= 127;
+  privateKey[31] |= 64;
+  char out[128];
+  size_t outLen = sizeof(out);
+  if (!wireguard_base64_encode(privateKey, sizeof(privateKey), out, &outLen)) return false;
+  outPrivateKeyB64 = String(out);
+  return true;
+}
+
+bool deriveWireGuardPublicKeyBase64(const String &privateKeyB64, String &outPublicKeyB64) {
+  uint8_t privateKey[WIREGUARD_PRIVATE_KEY_LEN];
+  size_t privateKeyLen = sizeof(privateKey);
+  if (!wireguard_base64_decode(privateKeyB64.c_str(), privateKey, &privateKeyLen) ||
+      privateKeyLen != WIREGUARD_PRIVATE_KEY_LEN) {
+    return false;
+  }
+  wireguard_platform_init();
+  struct wireguard_device device;
+  memset(&device, 0, sizeof(device));
+  if (!wireguard_device_init(&device, privateKey)) return false;
+
+  char out[128];
+  size_t outLen = sizeof(out);
+  if (!wireguard_base64_encode(device.public_key, WIREGUARD_PUBLIC_KEY_LEN, out, &outLen)) return false;
+  outPublicKeyB64 = String(out);
+  return true;
+}
+
+bool ensureWireGuardKeypair(bool printStatus) {
+  bool generated = false;
+  if (config.wg.privateKey.length() == 0) {
+    String generatedKey;
+    if (generateWireGuardPrivateKeyBase64(generatedKey)) {
+      config.wg.privateKey = generatedKey;
+      generated = true;
+      if (printStatus) Serial.println("wireguard: generated interface private key");
+    } else if (printStatus) {
+      Serial.println("wireguard: failed to generate interface private key");
+    }
+  }
+
+  if (!deriveWireGuardPublicKeyBase64(config.wg.privateKey, wgInterfacePublicKey)) {
+    wgInterfacePublicKey = "";
+    if (config.wg.privateKey.length() && printStatus) {
+      Serial.println("wireguard: invalid interface private key");
+    }
+  }
+  return generated;
+}
+
+void setupWireGuard() {
+  if (!config.wg.enabled) {
+    if (wgConnected) {
+      wgClient.end();
+      wgConnected = false;
+    }
+    return;
+  }
+  if (WiFi.status() != WL_CONNECTED) return;
+  if (config.wg.localIp == IPAddress() || config.wg.privateKey.length() == 0 ||
+      config.wg.peerPublicKey.length() == 0 || config.wg.endpointHost.length() == 0) {
+    Serial.println("wireguard: config incomplete; skipping");
+    wgConnected = false;
+    return;
+  }
+
+  // WireGuard handshake requires valid system time.
+  configTime(0, 0, "pool.ntp.org", "time.nist.gov", "time.google.com");
+  time_t now = time(nullptr);
+  unsigned long waitStart = millis();
+  while (now < 1700000000 && millis() - waitStart < 12000) {
+    delay(250);
+    now = time(nullptr);
+  }
+  if (now < 1700000000) {
+    Serial.println("wireguard: NTP sync timeout; skipping");
+    wgConnected = false;
+    return;
+  }
+
+  Serial.print("wireguard: connecting to ");
+  Serial.print(config.wg.endpointHost);
+  Serial.print(":");
+  Serial.println(config.wg.endpointPort);
+  wgConnected = wgClient.begin(
+      config.wg.localIp,
+      config.wg.privateKey.c_str(),
+      config.wg.endpointHost.c_str(),
+      config.wg.peerPublicKey.c_str(),
+      config.wg.endpointPort);
+  if (wgConnected) {
+    Serial.print("wireguard: connected local IP ");
+    Serial.println(config.wg.localIp);
+  } else {
+    Serial.println("wireguard: begin failed");
+  }
+  wgLastAttemptMs = millis();
+}
+
+void ensureWireGuardConnected() {
+  if (!config.wg.enabled) return;
+  if (wgConnected && wgClient.is_initialized()) return;
+  unsigned long now = millis();
+  if ((now - wgLastAttemptMs) < kWireGuardRetryIntervalMs) return;
+  wgLastAttemptMs = now;
+  setupWireGuard();
+}
+
 void setup() {
   Serial.begin(115200);
   delay(200);
@@ -1897,6 +2093,7 @@ void setup() {
   loadConfig();
   rebuildEmitters();
   startWifi();
+  setupWireGuard();
   setupArduinoOta();
   setupWeb();
   if (telnetServer) {
@@ -1916,6 +2113,7 @@ void loop() {
   handleSerialConsole();
   web.handleClient();
   handleTelnet();
+  ensureWireGuardConnected();
   dnsServer.processNextRequest();
   ArduinoOTA.handle();
 }
