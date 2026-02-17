@@ -91,7 +91,7 @@ struct WireGuardConfig {
 };
 
 struct DinplugConfig {
-  IPAddress gatewayIp;
+  String gatewayHost;
   bool autoConnect = false;
 };
 
@@ -172,6 +172,7 @@ bool applyDinplugAction(uint8_t hvacIndex, const DinplugButtonBinding &binding, 
 String dinplugConnectionStatus();
 void handleDinplugPage();
 void handleDinplugSave();
+void handleDinplugTest();
 
 // ---- Helpers ----
 
@@ -193,9 +194,11 @@ void printMonitorStatus() {
 }
 
 String dinplugConnectionStatus() {
-  if (config.dinplug.gatewayIp == IPAddress()) return "not configured";
+  String gatewayHost = config.dinplug.gatewayHost;
+  gatewayHost.trim();
+  if (gatewayHost.length() == 0) return "not configured";
   if (dinplugClient.connected()) {
-    return "connected to " + config.dinplug.gatewayIp.toString();
+    return "connected to " + gatewayHost;
   }
   if (config.dinplug.autoConnect) return "auto-connect enabled, disconnected";
   return "configured, disconnected";
@@ -497,7 +500,11 @@ String configToJsonString() {
   wg["endpoint_port"] = config.wg.endpointPort;
 
   JsonObject din = doc["dinplug"].to<JsonObject>();
-  din["gateway_ip"] = config.dinplug.gatewayIp.toString();
+  String gatewayHost = config.dinplug.gatewayHost;
+  gatewayHost.trim();
+  din["gateway_host"] = gatewayHost;
+  IPAddress gatewayIp;
+  din["gateway_ip"] = gatewayIp.fromString(gatewayHost) ? gatewayIp.toString() : "";
   din["auto_connect"] = config.dinplug.autoConnect;
 
   doc["hostname"] = config.hostname.length() ? config.hostname : kDefaultHostname;
@@ -571,7 +578,7 @@ void clearConfig() {
   config.wg.peerPublicKey = "";
   config.wg.endpointHost = "";
   config.wg.endpointPort = kDefaultWireGuardPort;
-  config.dinplug.gatewayIp = IPAddress();
+  config.dinplug.gatewayHost = "";
   config.dinplug.autoConnect = false;
   config.hostname = kDefaultHostname;
   config.telnetPort = kDefaultTelnetPort;
@@ -648,7 +655,10 @@ void loadConfig() {
   }
   JsonObject din = doc["dinplug"];
   if (!din.isNull()) {
-    config.dinplug.gatewayIp.fromString(din["gateway_ip"] | "");
+    String gatewayHost = din["gateway_host"] | "";
+    if (gatewayHost.length() == 0) gatewayHost = din["gateway_ip"] | "";
+    gatewayHost.trim();
+    config.dinplug.gatewayHost = gatewayHost;
     config.dinplug.autoConnect = din["auto_connect"] | false;
   }
   bool generatedWgKey = ensureWireGuardKeypair(false);
@@ -1165,16 +1175,27 @@ void handleDinplugPage() {
   if (!checkAuth()) { requestAuth(); return; }
   String html = pageHeader("DINplug");
   html += "<div class='card'><h2>DINplug Gateway</h2>";
+  String testResult = web.arg("test");
+  if (testResult == "ok") {
+    html += "<p><strong>Test result:</strong> Connected.</p>";
+  } else if (testResult == "fail") {
+    html += "<p><strong>Test result:</strong> Connection failed.</p>";
+  } else if (testResult == "missing") {
+    html += "<p><strong>Test result:</strong> Set a gateway first.</p>";
+  }
   html += "<p>Status: <strong id='dinStatus'>" + htmlEscape(dinplugConnectionStatus()) + "</strong></p>";
   html += "<form method='POST' action='/dinplug/save'>";
-  html += "<label>Gateway IP</label>";
-  html += "<input name='gateway_ip' placeholder='192.168.1.50' value='" + htmlEscape(config.dinplug.gatewayIp.toString()) + "'>";
+  html += "<label>Gateway (IP or hostname)</label>";
+  html += "<input name='gateway_host' placeholder='dinplug.example.com or 192.168.1.50' value='" + htmlEscape(config.dinplug.gatewayHost) + "'>";
   html += "<div class='row'><input type='checkbox' id='dinAuto' name='auto_connect'" +
           String(config.dinplug.autoConnect ? " checked" : "") +
           "><label for='dinAuto'>Connect on boot</label></div>";
   html += "<button type='submit'>Save</button>";
   html += "</form>";
-  html += "<p>On save the device will attempt to connect immediately when a gateway IP is set.</p>";
+  html += "<form method='POST' action='/dinplug/test'>";
+  html += "<button type='submit' class='secondary'>Test connection</button>";
+  html += "</form>";
+  html += "<p>On save the device will attempt to connect immediately when a gateway is set.</p>";
   html += "</div>";
   html += pageFooter();
   web.send(200, "text/html", html);
@@ -1182,11 +1203,32 @@ void handleDinplugPage() {
 
 void handleDinplugSave() {
   if (!checkAuth()) { requestAuth(); return; }
-  config.dinplug.gatewayIp.fromString(web.arg("gateway_ip"));
+  String gatewayHost = web.arg("gateway_host");
+  if (gatewayHost.length() == 0) gatewayHost = web.arg("gateway_ip");
+  gatewayHost.trim();
+  config.dinplug.gatewayHost = gatewayHost;
   config.dinplug.autoConnect = web.hasArg("auto_connect");
   saveConfig();
+  if (config.dinplug.gatewayHost.length() == 0) {
+    dinplugClient.stop();
+    dinplugConnected = false;
+  }
   ensureDinplugConnected(true);
   web.sendHeader("Location", "/dinplug");
+  web.send(302, "text/plain", "");
+}
+
+void handleDinplugTest() {
+  if (!checkAuth()) { requestAuth(); return; }
+  String gatewayHost = config.dinplug.gatewayHost;
+  gatewayHost.trim();
+  if (gatewayHost.length() == 0) {
+    web.sendHeader("Location", "/dinplug?test=missing");
+    web.send(302, "text/plain", "");
+    return;
+  }
+  ensureDinplugConnected(true);
+  web.sendHeader("Location", dinplugClient.connected() ? "/dinplug?test=ok" : "/dinplug?test=fail");
   web.send(302, "text/plain", "");
 }
 
@@ -2006,6 +2048,7 @@ void setupWeb() {
   web.on("/hvacs/delete", HTTP_GET, handleHvacsDelete);
   web.on("/dinplug", handleDinplugPage);
   web.on("/dinplug/save", HTTP_POST, handleDinplugSave);
+  web.on("/dinplug/test", HTTP_POST, handleDinplugTest);
   web.on("/raw/test", HTTP_POST, handleRawTest);
   web.on("/monitor", HTTP_GET, handleMonitorPage);
   web.on("/api/monitor", HTTP_GET, handleApiMonitor);
@@ -2045,7 +2088,9 @@ bool sendDinplugCommand(const String &cmd) {
 }
 
 void ensureDinplugConnected(bool forceNow) {
-  if (config.dinplug.gatewayIp == IPAddress()) return;
+  String gatewayHost = config.dinplug.gatewayHost;
+  gatewayHost.trim();
+  if (gatewayHost.length() == 0) return;
   if (dinplugClient.connected()) {
     dinplugConnected = true;
     return;
@@ -2057,8 +2102,8 @@ void ensureDinplugConnected(bool forceNow) {
   dinplugConnected = false;
   if (!WiFi.isConnected()) return;
   Serial.print("dinplug: connecting to ");
-  Serial.println(config.dinplug.gatewayIp);
-  if (dinplugClient.connect(config.dinplug.gatewayIp, kDinplugPort)) {
+  Serial.println(gatewayHost);
+  if (dinplugClient.connect(gatewayHost.c_str(), kDinplugPort)) {
     dinplugConnected = true;
     dinplugBuffer = "";
     dinplugLastKeepAliveMs = millis();
@@ -2105,7 +2150,7 @@ void processDinplugLine(const String &line) {
 }
 
 void handleDinplug() {
-  if (config.dinplug.gatewayIp == IPAddress()) return;
+  if (config.dinplug.gatewayHost.length() == 0) return;
   if (config.dinplug.autoConnect) ensureDinplugConnected(false);
   if (!dinplugClient.connected()) return;
   unsigned long now = millis();
@@ -2453,7 +2498,7 @@ void setup() {
   telnetServer->setNoDelay(true);
   Serial.print("telnet: listening on ");
   Serial.println(config.telnetPort);
-  if (config.dinplug.autoConnect && config.dinplug.gatewayIp != IPAddress()) {
+  if (config.dinplug.autoConnect && config.dinplug.gatewayHost.length() > 0) {
     ensureDinplugConnected(true);
   }
   printMonitorStatus();
