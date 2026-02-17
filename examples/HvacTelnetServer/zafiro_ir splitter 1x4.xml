@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="racepoint_component_profile.xsd" 
+    manufacturer="Zafiro" model="IR Splitter 1x4" device_class="Media_converter" minimum_component_engine_version="0" rpm_xml_version="$Revision: 1.1 $">
+    <notes>
+    </notes>
+    
+    <control_interfaces>
+        <ir ir_command_format_type="racepointmedia"></ir>
+    </control_interfaces>
+    
+    <device_control_interfaces>
+        <ir name_on_component="IR Output 1" connector_type="ir_control_captive_screw"/>
+        <ir name_on_component="IR Output 2" connector_type="ir_control_captive_screw"/>
+        <ir name_on_component="IR Output 3" connector_type="ir_control_captive_screw"/>
+        <ir name_on_component="IR Output 4" connector_type="ir_control_captive_screw"/>
+    </device_control_interfaces>
+    
+    
+</component>

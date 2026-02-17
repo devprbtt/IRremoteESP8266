@@ -30,6 +30,10 @@ static const uint8_t kMaxHvacs = 32;
 static const uint8_t kMaxCustomTemps = 16;
 static const uint16_t kDefaultTelnetPort = 4998;
 static const uint16_t kMonitorLogCapacity = 200;
+static const uint16_t kDinplugPort = 23;
+static const unsigned long kDinplugReconnectIntervalMs = 5000;
+static const unsigned long kDinplugKeepAliveIntervalMs = 10000;
+static const uint8_t kMaxDinplugButtons = 8;
 
 static const char *kConfigPath = "/config.json";
 static const char *kApSsid = "IR-HVAC-Setup";
@@ -38,6 +42,14 @@ static const char *kDefaultHostname = "ir-server";
 struct CustomTempCode {
   int tempC;
   String code;
+};
+
+struct DinplugButtonBinding {
+  uint16_t buttonId = 0;
+  String pressAction = "none";
+  float pressValue = 1.0f;
+  String holdAction = "none";
+  float holdValue = 1.0f;
 };
 
 struct HvacConfig {
@@ -50,6 +62,9 @@ struct HvacConfig {
   String customOff;
   CustomTempCode customTemps[kMaxCustomTemps];
   uint8_t customTempCount = 0;
+  uint16_t dinKeypadId = 0;
+  DinplugButtonBinding dinButtons[kMaxDinplugButtons];
+  uint8_t dinButtonCount = 0;
 };
 
 struct WifiConfig {
@@ -75,10 +90,16 @@ struct WireGuardConfig {
   uint16_t endpointPort = 51820;
 };
 
+struct DinplugConfig {
+  IPAddress gatewayIp;
+  bool autoConnect = false;
+};
+
 struct Config {
   WifiConfig wifi;
   WebConfig web;
   WireGuardConfig wg;
+  DinplugConfig dinplug;
   String hostname;
   uint16_t telnetPort = kDefaultTelnetPort;
   uint16_t emitterGpios[kMaxEmitters];
@@ -112,6 +133,11 @@ WebServer web(80);
 WiFiServer *telnetServer = nullptr;
 WiFiClient telnetClients[kMaxTelnetClients];
 String telnetBuffers[kMaxTelnetClients];
+WiFiClient dinplugClient;
+String dinplugBuffer;
+bool dinplugConnected = false;
+unsigned long dinplugLastAttemptMs = 0;
+unsigned long dinplugLastKeepAliveMs = 0;
 DNSServer dnsServer;
 bool telnetMonitorEnabled = true;
 String serialConsoleBuffer;
@@ -138,6 +164,14 @@ void ensureWireGuardConnected();
 bool generateWireGuardPrivateKeyBase64(String &outPrivateKeyB64);
 bool deriveWireGuardPublicKeyBase64(const String &privateKeyB64, String &outPublicKeyB64);
 bool ensureWireGuardKeypair(bool printStatus);
+void handleDinplug();
+void ensureDinplugConnected(bool forceNow = false);
+void processDinplugLine(const String &line);
+void handleDinplugButtonEvent(uint16_t keypadId, uint16_t buttonId, const String &action);
+bool applyDinplugAction(uint8_t hvacIndex, const DinplugButtonBinding &binding, bool isHold);
+String dinplugConnectionStatus();
+void handleDinplugPage();
+void handleDinplugSave();
 
 // ---- Helpers ----
 
@@ -156,6 +190,15 @@ void requestAuth() {
 void printMonitorStatus() {
   Serial.print("monitor: telnet ");
   Serial.println(telnetMonitorEnabled ? "on" : "off");
+}
+
+String dinplugConnectionStatus() {
+  if (config.dinplug.gatewayIp == IPAddress()) return "not configured";
+  if (dinplugClient.connected()) {
+    return "connected to " + config.dinplug.gatewayIp.toString();
+  }
+  if (config.dinplug.autoConnect) return "auto-connect enabled, disconnected";
+  return "configured, disconnected";
 }
 
 void addMonitorLogEntry(const String &line) {
@@ -453,6 +496,10 @@ String configToJsonString() {
   wg["endpoint_host"] = config.wg.endpointHost;
   wg["endpoint_port"] = config.wg.endpointPort;
 
+  JsonObject din = doc["dinplug"].to<JsonObject>();
+  din["gateway_ip"] = config.dinplug.gatewayIp.toString();
+  din["auto_connect"] = config.dinplug.autoConnect;
+
   doc["hostname"] = config.hostname.length() ? config.hostname : kDefaultHostname;
   doc["telnet_port"] = config.telnetPort;
 
@@ -478,6 +525,17 @@ String configToJsonString() {
       for (uint8_t t = 0; t < h.customTempCount; t++) {
         temps[String(h.customTemps[t].tempC)] = h.customTemps[t].code;
       }
+    }
+    JsonObject dinplug = o["dinplug"].to<JsonObject>();
+    dinplug["keypad_id"] = h.dinKeypadId;
+    JsonArray btns = dinplug["buttons"].to<JsonArray>();
+    for (uint8_t b = 0; b < h.dinButtonCount; b++) {
+      JsonObject bo = btns.add<JsonObject>();
+      bo["id"] = h.dinButtons[b].buttonId;
+      bo["press_action"] = h.dinButtons[b].pressAction;
+      bo["press_value"] = h.dinButtons[b].pressValue;
+      bo["hold_action"] = h.dinButtons[b].holdAction;
+      bo["hold_value"] = h.dinButtons[b].holdValue;
     }
   }
 
@@ -513,6 +571,8 @@ void clearConfig() {
   config.wg.peerPublicKey = "";
   config.wg.endpointHost = "";
   config.wg.endpointPort = kDefaultWireGuardPort;
+  config.dinplug.gatewayIp = IPAddress();
+  config.dinplug.autoConnect = false;
   config.hostname = kDefaultHostname;
   config.telnetPort = kDefaultTelnetPort;
   for (uint8_t i = 0; i < kMaxEmitters; i++) {
@@ -533,6 +593,8 @@ void clearConfig() {
       h.customTemps[t].code = "";
     }
     h.customTempCount = 0;
+    h.dinKeypadId = 0;
+    h.dinButtonCount = 0;
   }
   config.hvacCount = 0;
   initHvacRuntimeStates();
@@ -584,6 +646,11 @@ void loadConfig() {
     config.wg.endpointPort = wg["endpoint_port"] | kDefaultWireGuardPort;
     if (config.wg.endpointPort == 0) config.wg.endpointPort = kDefaultWireGuardPort;
   }
+  JsonObject din = doc["dinplug"];
+  if (!din.isNull()) {
+    config.dinplug.gatewayIp.fromString(din["gateway_ip"] | "");
+    config.dinplug.autoConnect = din["auto_connect"] | false;
+  }
   bool generatedWgKey = ensureWireGuardKeypair(false);
   if (generatedWgKey) saveConfig();
 
@@ -620,6 +687,22 @@ void loadConfig() {
             h.customTemps[h.customTempCount].tempC = atoi(kv.key().c_str());
             h.customTemps[h.customTempCount].code = kv.value().as<String>();
             h.customTempCount++;
+          }
+        }
+      }
+      JsonObject dinplug = o["dinplug"];
+      if (!dinplug.isNull()) {
+        h.dinKeypadId = dinplug["keypad_id"] | 0;
+        JsonArray btns = dinplug["buttons"];
+        if (!btns.isNull()) {
+          for (JsonObject bo : btns) {
+            if (h.dinButtonCount >= kMaxDinplugButtons) break;
+            DinplugButtonBinding &b = h.dinButtons[h.dinButtonCount++];
+            b.buttonId = bo["id"] | 0;
+            b.pressAction = bo["press_action"] | "none";
+            b.pressValue = bo["press_value"] | 1.0f;
+            b.holdAction = bo["hold_action"] | "none";
+            b.holdValue = bo["hold_value"] | 1.0f;
           }
         }
       }
@@ -757,6 +840,68 @@ void writeStateJson(JsonObject state, const String &id, const HvacRuntimeState &
   state["light"] = hvacState.light ? "on" : "off";
 }
 
+bool applyDinplugAction(uint8_t hvacIndex, const DinplugButtonBinding &binding, bool isHold) {
+  if (hvacIndex >= config.hvacCount) return false;
+  ensureHvacStateInitialized(hvacIndex);
+  HvacRuntimeState &state = hvacStates[hvacIndex];
+  HvacConfig &hvac = config.hvacs[hvacIndex];
+  String action = isHold ? binding.holdAction : binding.pressAction;
+  float value = isHold ? binding.holdValue : binding.pressValue;
+  action.toLowerCase();
+  if (action == "none" || action.length() == 0) return false;
+
+  JsonDocument cmd;
+  cmd["cmd"] = "send";
+  cmd["id"] = hvac.id;
+  cmd["mode"] = state.mode;
+  cmd["fan"] = state.fan;
+  cmd["power"] = state.power ? "on" : "off";
+  cmd["temp"] = state.setpoint;
+
+  auto clampTemp = [](float t) {
+    if (t < 16) return 16.0f;
+    if (t > 32) return 32.0f;
+    return t;
+  };
+
+  if (action == "temp_up") {
+    cmd["temp"] = clampTemp(state.setpoint + value);
+    cmd["power"] = "on";
+  } else if (action == "temp_down") {
+    cmd["temp"] = clampTemp(state.setpoint - value);
+    cmd["power"] = "on";
+  } else if (action == "set_temp") {
+    cmd["temp"] = clampTemp(value);
+    cmd["power"] = "on";
+  } else if (action == "power_on") {
+    cmd["power"] = "on";
+  } else if (action == "power_off") {
+    cmd["power"] = "off";
+  } else if (action == "toggle_power") {
+    cmd["power"] = state.power ? "off" : "on";
+  } else if (action == "mode_heat") {
+    cmd["mode"] = "heat";
+    cmd["power"] = "on";
+  } else if (action == "mode_cool") {
+    cmd["mode"] = "cool";
+    cmd["power"] = "on";
+  } else if (action == "mode_fan") {
+    cmd["mode"] = "fan";
+    cmd["power"] = "on";
+  } else if (action == "mode_auto") {
+    cmd["mode"] = "auto";
+    cmd["power"] = "on";
+  } else if (action == "mode_off") {
+    cmd["power"] = "off";
+  } else {
+    return false;
+  }
+
+  JsonDocument resp;
+  bool ok = processCommand(cmd, resp, -1);
+  return ok;
+}
+
 void sendTelnetJson(WiFiClient &client, JsonDocument &doc) {
   String payload;
   payload.reserve(512);
@@ -806,6 +951,38 @@ String emitterOptionsHtml(int selectedIndex) {
     if (static_cast<int>(i) == selectedIndex) out += " selected";
     out += ">" + String(i) + " (GPIO " + String(config.emitterGpios[i]) + ")</option>";
   }
+  return out;
+}
+
+String dinActionOptionsHtml(const String &selected) {
+  const char *actions[] = {
+      "none", "temp_up", "temp_down", "set_temp",
+      "power_on", "power_off", "toggle_power",
+      "mode_heat", "mode_cool", "mode_fan", "mode_auto", "mode_off"};
+  const size_t count = sizeof(actions) / sizeof(actions[0]);
+  String out;
+  for (size_t i = 0; i < count; i++) {
+    String a = actions[i];
+    out += "<option value='" + a + "'";
+    if (selected == a) out += " selected";
+    out += ">" + a + "</option>";
+  }
+  return out;
+}
+
+String dinButtonsJson(const HvacConfig &h) {
+  DynamicJsonDocument doc(512);
+  JsonArray arr = doc.to<JsonArray>();
+  for (uint8_t i = 0; i < h.dinButtonCount; i++) {
+    JsonObject o = arr.add<JsonObject>();
+    o["id"] = h.dinButtons[i].buttonId;
+    o["press_action"] = h.dinButtons[i].pressAction;
+    o["press_value"] = h.dinButtons[i].pressValue;
+    o["hold_action"] = h.dinButtons[i].holdAction;
+    o["hold_value"] = h.dinButtons[i].holdValue;
+  }
+  String out;
+  serializeJson(doc, out);
   return out;
 }
 
@@ -859,7 +1036,7 @@ String pageHeader(const String &title) {
   html += ".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;}";
   html += ".pill{display:inline-block;background:#1e293b;color:#e2e8f0;padding:2px 8px;border-radius:999px;font-size:12px;margin-left:6px;}";
   html += "</style></head><body><div class='wrap'>";
-  html += "<nav><a href='/'>Home</a><a href='/config'>Config</a><a href='/emitters'>Emitters</a><a href='/hvacs'>HVACs</a><a href='/hvacs/test'>Test HVAC</a><a href='/monitor'>Monitor</a><a href='/firmware'>Firmware</a><a href='/config/upload'>Upload</a><a href='/config/download'>Download</a></nav>";
+  html += "<nav><a href='/'>Home</a><a href='/config'>Config</a><a href='/emitters'>Emitters</a><a href='/hvacs'>HVACs</a><a href='/hvacs/test'>Test HVAC</a><a href='/dinplug'>DINplug</a><a href='/monitor'>Monitor</a><a href='/firmware'>Firmware</a><a href='/config/upload'>Upload</a><a href='/config/download'>Download</a></nav>";
   return html;
 }
 
@@ -879,6 +1056,7 @@ void handleHome() {
   if (config.wg.enabled && config.wg.localIp != IPAddress()) {
     html += "<p>WireGuard IP: <strong>" + config.wg.localIp.toString() + "</strong></p>";
   }
+  html += "<p>DINplug: <strong>" + htmlEscape(dinplugConnectionStatus()) + "</strong></p>";
   html += "<p>Emitters: <strong>" + String(config.emitterCount) + "</strong></p>";
   html += "<p>HVACs: <strong>" + String(config.hvacCount) + "</strong></p></div>";
   html += pageFooter();
@@ -981,6 +1159,35 @@ void handleConfigSave() {
   web.send(200, "text/html", "<html><body><p>Saved. Rebooting...</p></body></html>");
   delay(500);
   ESP.restart();
+}
+
+void handleDinplugPage() {
+  if (!checkAuth()) { requestAuth(); return; }
+  String html = pageHeader("DINplug");
+  html += "<div class='card'><h2>DINplug Gateway</h2>";
+  html += "<p>Status: <strong id='dinStatus'>" + htmlEscape(dinplugConnectionStatus()) + "</strong></p>";
+  html += "<form method='POST' action='/dinplug/save'>";
+  html += "<label>Gateway IP</label>";
+  html += "<input name='gateway_ip' placeholder='192.168.1.50' value='" + htmlEscape(config.dinplug.gatewayIp.toString()) + "'>";
+  html += "<div class='row'><input type='checkbox' id='dinAuto' name='auto_connect'" +
+          String(config.dinplug.autoConnect ? " checked" : "") +
+          "><label for='dinAuto'>Connect on boot</label></div>";
+  html += "<button type='submit'>Save</button>";
+  html += "</form>";
+  html += "<p>On save the device will attempt to connect immediately when a gateway IP is set.</p>";
+  html += "</div>";
+  html += pageFooter();
+  web.send(200, "text/html", html);
+}
+
+void handleDinplugSave() {
+  if (!checkAuth()) { requestAuth(); return; }
+  config.dinplug.gatewayIp.fromString(web.arg("gateway_ip"));
+  config.dinplug.autoConnect = web.hasArg("auto_connect");
+  saveConfig();
+  ensureDinplugConnected(true);
+  web.sendHeader("Location", "/dinplug");
+  web.send(302, "text/plain", "");
 }
 
 void handleEmittersPage() {
@@ -1094,25 +1301,55 @@ void handleHvacsPage() {
     for (uint8_t i = 0; i < config.hvacCount; i++) {
       const HvacConfig &h = config.hvacs[i];
       html += "<option value='" + String(i) + "' data-protocol='" + htmlEscape(h.protocol) +
-              "' data-emitter='" + String(h.emitterIndex) + "' data-model='" + String(h.model) + "'>";
+              "' data-emitter='" + String(h.emitterIndex) + "' data-model='" + String(h.model) +
+              "' data-keypad='" + String(h.dinKeypadId) + "' data-buttons='" + htmlEscape(dinButtonsJson(h)) + "'>";
       html += htmlEscape(h.id) + " (" + htmlEscape(h.protocol) + ")</option>";
     }
     html += "</select>";
     html += "<label>Protocol</label><select name='protocol' id='editHvacProtocol'>" + protocolOptionsHtml("") + "</select>";
     html += "<label>Emitter</label><select name='emitter' id='editHvacEmitter'>" + emitterOptionsHtml(0) + "</select>";
     html += "<label>Model (optional)</label><input name='model' id='editHvacModel' value='-1'>";
+    html += "<label>DINplug Keypad ID</label><input name='din_keypad_id' id='dinKeypad' type='number' min='0' value='0'>";
+    html += "<h4>Keypad Button Actions</h4>";
+    html += "<table><tr><th>#</th><th>Button ID</th><th>Press Action</th><th>Press Value</th><th>Hold Action</th><th>Hold Value</th></tr>";
+    for (uint8_t b = 0; b < kMaxDinplugButtons; b++) {
+      html += "<tr data-btn-row='" + String(b) + "'>";
+      html += "<td>" + String(b + 1) + "</td>";
+      html += "<td><input name='btn" + String(b) + "_id' type='number' min='0' value='0'></td>";
+      html += "<td><select name='btn" + String(b) + "_press_action'>" + dinActionOptionsHtml("none") + "</select></td>";
+      html += "<td><input name='btn" + String(b) + "_press_value' type='number' step='0.5' value='1'></td>";
+      html += "<td><select name='btn" + String(b) + "_hold_action'>" + dinActionOptionsHtml("none") + "</select></td>";
+      html += "<td><input name='btn" + String(b) + "_hold_value' type='number' step='0.5' value='1'></td>";
+      html += "</tr>";
+    }
+    html += "</table>";
     html += "<button type='submit' class='secondary'>Update</button></form>";
     html += "<script>";
     html += "const hvacSel=document.getElementById('editHvacIndex');";
     html += "const protoSel=document.getElementById('editHvacProtocol');";
     html += "const emSel=document.getElementById('editHvacEmitter');";
     html += "const modelInput=document.getElementById('editHvacModel');";
+    html += "const keypadInput=document.getElementById('dinKeypad');";
+    html += "const btnRows=[...document.querySelectorAll('[data-btn-row]')];";
     html += "const sync=()=>{if(!hvacSel)return;const opt=hvacSel.selectedOptions[0];";
     html += "if(!opt)return;const p=opt.dataset.protocol||'';";
     html += "const e=opt.dataset.emitter||'0';const m=opt.dataset.model||'-1';";
+    html += "const k=opt.dataset.keypad||'0';const btnJson=opt.dataset.buttons||'[]';";
     html += "if(protoSel){for(const o of protoSel.options){o.selected=(o.value===p);} }";
     html += "if(emSel){for(const o of emSel.options){o.selected=(o.value===e);} }";
-    html += "if(modelInput){modelInput.value=m;}};";
+    html += "if(modelInput){modelInput.value=m;}if(keypadInput){keypadInput.value=k;}";
+    html += "let parsed=[];try{parsed=JSON.parse(btnJson);}catch(err){parsed=[];}";
+    html += "btnRows.forEach((row,idx)=>{const data=parsed[idx]||{};";
+    html += "const idInput=row.querySelector(`input[name='btn${idx}_id']`);";
+    html += "const pAct=row.querySelector(`select[name='btn${idx}_press_action']`);";
+    html += "const pVal=row.querySelector(`input[name='btn${idx}_press_value']`);";
+    html += "const hAct=row.querySelector(`select[name='btn${idx}_hold_action']`);";
+    html += "const hVal=row.querySelector(`input[name='btn${idx}_hold_value']`);";
+    html += "if(idInput)idInput.value=data.id||0;";
+    html += "if(pAct)pAct.value=data.press_action||'none';";
+    html += "if(pVal)pVal.value=data.press_value!=null?data.press_value:1;";
+    html += "if(hAct)hAct.value=data.hold_action||'none';";
+    html += "if(hVal)hVal.value=data.hold_value!=null?data.hold_value:1;});};";
     html += "if(hvacSel){hvacSel.addEventListener('change',sync);sync();}";
     html += "</script>";
   }
@@ -1184,6 +1421,24 @@ void handleHvacsUpdate() {
   h.emitterIndex = emitterIndex;
   h.model = model;
   h.isCustom = (protocol == "CUSTOM");
+  h.dinKeypadId = web.arg("din_keypad_id").toInt();
+  h.dinButtonCount = 0;
+  for (uint8_t i = 0; i < kMaxDinplugButtons; i++) {
+    String base = "btn" + String(i) + "_";
+    uint16_t btnId = web.arg(base + "id").toInt();
+    if (btnId == 0) continue;
+    DinplugButtonBinding &b = h.dinButtons[h.dinButtonCount++];
+    b.buttonId = btnId;
+    b.pressAction = web.arg(base + "press_action");
+    if (!b.pressAction.length()) b.pressAction = "none";
+    b.pressValue = web.arg(base + "press_value").toFloat();
+    if (b.pressValue == 0) b.pressValue = 1.0f;
+    b.holdAction = web.arg(base + "hold_action");
+    if (!b.holdAction.length()) b.holdAction = "none";
+    b.holdValue = web.arg(base + "hold_value").toFloat();
+    if (b.holdValue == 0) b.holdValue = 1.0f;
+    if (h.dinButtonCount >= kMaxDinplugButtons) break;
+  }
   resetHvacRuntimeState(static_cast<uint8_t>(idx));
   saveConfig();
   Serial.print("web: hvac updated index ");
@@ -1749,6 +2004,8 @@ void setupWeb() {
   web.on("/hvacs/test", HTTP_POST, handleHvacTest);
   web.on("/hvacs/update", HTTP_POST, handleHvacsUpdate);
   web.on("/hvacs/delete", HTTP_GET, handleHvacsDelete);
+  web.on("/dinplug", handleDinplugPage);
+  web.on("/dinplug/save", HTTP_POST, handleDinplugSave);
   web.on("/raw/test", HTTP_POST, handleRawTest);
   web.on("/monitor", HTTP_GET, handleMonitorPage);
   web.on("/api/monitor", HTTP_GET, handleApiMonitor);
@@ -1776,6 +2033,97 @@ void setupWeb() {
     web.send(302, "text/plain", "");
   });
   web.begin();
+}
+
+// ---- DINplug handling ----
+
+bool sendDinplugCommand(const String &cmd) {
+  if (!dinplugClient.connected()) return false;
+  dinplugClient.print(cmd + "\r\n");
+  if (telnetMonitorEnabled) addMonitorLogEntry("din-tx " + cmd);
+  return true;
+}
+
+void ensureDinplugConnected(bool forceNow) {
+  if (config.dinplug.gatewayIp == IPAddress()) return;
+  if (dinplugClient.connected()) {
+    dinplugConnected = true;
+    return;
+  }
+  unsigned long now = millis();
+  if (!forceNow && (now - dinplugLastAttemptMs) < kDinplugReconnectIntervalMs) return;
+  dinplugLastAttemptMs = now;
+  dinplugClient.stop();
+  dinplugConnected = false;
+  if (!WiFi.isConnected()) return;
+  Serial.print("dinplug: connecting to ");
+  Serial.println(config.dinplug.gatewayIp);
+  if (dinplugClient.connect(config.dinplug.gatewayIp, kDinplugPort)) {
+    dinplugConnected = true;
+    dinplugBuffer = "";
+    dinplugLastKeepAliveMs = millis();
+    Serial.println("dinplug: connected");
+    addMonitorLogEntry("din: connected");
+    sendDinplugCommand("REFRESH");
+  } else {
+    Serial.println("dinplug: connect failed");
+  }
+}
+
+void handleDinplugButtonEvent(uint16_t keypadId, uint16_t buttonId, const String &action) {
+  bool isHold = (action == "HOLD");
+  for (uint8_t i = 0; i < config.hvacCount; i++) {
+    const HvacConfig &h = config.hvacs[i];
+    if (h.dinKeypadId == 0 || h.dinKeypadId != keypadId) continue;
+    for (uint8_t b = 0; b < h.dinButtonCount; b++) {
+      const DinplugButtonBinding &bind = h.dinButtons[b];
+      if (bind.buttonId != buttonId) continue;
+      if (applyDinplugAction(i, bind, isHold)) {
+        Serial.print("dinplug: applied action to hvac ");
+        Serial.println(h.id);
+      }
+    }
+  }
+}
+
+void processDinplugLine(const String &line) {
+  String trimmed = line;
+  trimmed.trim();
+  if (telnetMonitorEnabled) addMonitorLogEntry("din-rx " + trimmed);
+  if (!trimmed.startsWith("R:BTN ")) return;
+  int firstSpace = trimmed.indexOf(' ');
+  int secondSpace = trimmed.indexOf(' ', firstSpace + 1);
+  int thirdSpace = trimmed.indexOf(' ', secondSpace + 1);
+  if (firstSpace < 0 || secondSpace < 0 || thirdSpace < 0) return;
+  String action = trimmed.substring(firstSpace + 1, secondSpace);
+  action.toUpperCase();
+  uint16_t keypadId = static_cast<uint16_t>(trimmed.substring(secondSpace + 1, thirdSpace).toInt());
+  uint16_t buttonId = static_cast<uint16_t>(trimmed.substring(thirdSpace + 1).toInt());
+  if (action == "PRESS" || action == "HOLD") {
+    handleDinplugButtonEvent(keypadId, buttonId, action);
+  }
+}
+
+void handleDinplug() {
+  if (config.dinplug.gatewayIp == IPAddress()) return;
+  if (config.dinplug.autoConnect) ensureDinplugConnected(false);
+  if (!dinplugClient.connected()) return;
+  unsigned long now = millis();
+  if ((now - dinplugLastKeepAliveMs) > kDinplugKeepAliveIntervalMs) {
+    sendDinplugCommand("STA");
+    dinplugLastKeepAliveMs = now;
+  }
+  while (dinplugClient.available()) {
+    char ch = static_cast<char>(dinplugClient.read());
+    if (ch == '\r') continue;
+    if (ch == '\n') {
+      if (dinplugBuffer.length()) processDinplugLine(dinplugBuffer);
+      dinplugBuffer = "";
+    } else {
+      dinplugBuffer += ch;
+      if (dinplugBuffer.length() > 512) dinplugBuffer = "";
+    }
+  }
 }
 
 // ---- Telnet handling ----
@@ -2105,6 +2453,9 @@ void setup() {
   telnetServer->setNoDelay(true);
   Serial.print("telnet: listening on ");
   Serial.println(config.telnetPort);
+  if (config.dinplug.autoConnect && config.dinplug.gatewayIp != IPAddress()) {
+    ensureDinplugConnected(true);
+  }
   printMonitorStatus();
   Serial.println("monitor: use 'monitor on|off|status' via serial terminal");
 }
@@ -2113,6 +2464,7 @@ void loop() {
   handleSerialConsole();
   web.handleClient();
   handleTelnet();
+  handleDinplug();
   ensureWireGuardConnected();
   dnsServer.processNextRequest();
   ArduinoOTA.handle();
