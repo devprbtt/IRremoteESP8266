@@ -34,6 +34,7 @@ static const uint16_t kDinplugPort = 23;
 static const unsigned long kDinplugReconnectIntervalMs = 5000;
 static const unsigned long kDinplugKeepAliveIntervalMs = 10000;
 static const uint8_t kMaxDinplugButtons = 8;
+static const uint8_t kMaxDinplugKeypads = 8;
 
 static const char *kConfigPath = "/config.json";
 static const char *kApSsid = "IR-HVAC-Setup";
@@ -45,11 +46,14 @@ struct CustomTempCode {
 };
 
 struct DinplugButtonBinding {
+  uint16_t keypadId = 0;
   uint16_t buttonId = 0;
   String pressAction = "none";
   float pressValue = 1.0f;
   String holdAction = "none";
   float holdValue = 1.0f;
+  String togglePowerMode = "auto";  // Used when toggle_power turns HVAC on.
+  uint8_t ledFollowMode = 0;  // 0=disabled, 1=LED on when HVAC on, 2=LED on when HVAC off
 };
 
 struct HvacConfig {
@@ -62,7 +66,8 @@ struct HvacConfig {
   String customOff;
   CustomTempCode customTemps[kMaxCustomTemps];
   uint8_t customTempCount = 0;
-  uint16_t dinKeypadId = 0;
+  uint16_t dinKeypadIds[kMaxDinplugKeypads];
+  uint8_t dinKeypadCount = 0;
   DinplugButtonBinding dinButtons[kMaxDinplugButtons];
   uint8_t dinButtonCount = 0;
 };
@@ -170,9 +175,18 @@ void processDinplugLine(const String &line);
 void handleDinplugButtonEvent(uint16_t keypadId, uint16_t buttonId, const String &action);
 bool applyDinplugAction(uint8_t hvacIndex, const DinplugButtonBinding &binding, bool isHold);
 String dinplugConnectionStatus();
+void writeStateJson(JsonObject state, const String &id, const HvacRuntimeState &hvacState);
 void handleDinplugPage();
 void handleDinplugSave();
 void handleDinplugTest();
+bool dinActionUsesValue(const String &action);
+String dinToggleModeOptionsHtml(const String &selected);
+String dinKeypadsCsv(const HvacConfig &h);
+void parseDinKeypadsCsv(const String &csv, HvacConfig &h);
+bool hvacHasDinKeypad(const HvacConfig &h, uint16_t keypadId);
+void logHvacStateChange(const String &id, const HvacRuntimeState &after, int8_t sourceTelnetSlot);
+bool setDinplugLed(uint16_t keypadId, uint16_t ledId, uint8_t state);
+void syncDinplugLedsForHvac(uint8_t hvacIndex);
 
 // ---- Helpers ----
 
@@ -534,15 +548,22 @@ String configToJsonString() {
       }
     }
     JsonObject dinplug = o["dinplug"].to<JsonObject>();
-    dinplug["keypad_id"] = h.dinKeypadId;
+    dinplug["keypad_ids"] = dinKeypadsCsv(h);
+    dinplug["keypad_id"] = (h.dinKeypadCount > 0) ? h.dinKeypadIds[0] : 0;
+    JsonArray keypads = dinplug["keypads"].to<JsonArray>();
+    for (uint8_t k = 0; k < h.dinKeypadCount; k++) keypads.add(h.dinKeypadIds[k]);
     JsonArray btns = dinplug["buttons"].to<JsonArray>();
     for (uint8_t b = 0; b < h.dinButtonCount; b++) {
       JsonObject bo = btns.add<JsonObject>();
+      bo["keypad_id"] = h.dinButtons[b].keypadId;
       bo["id"] = h.dinButtons[b].buttonId;
       bo["press_action"] = h.dinButtons[b].pressAction;
       bo["press_value"] = h.dinButtons[b].pressValue;
       bo["hold_action"] = h.dinButtons[b].holdAction;
       bo["hold_value"] = h.dinButtons[b].holdValue;
+      bo["toggle_power_mode"] = h.dinButtons[b].togglePowerMode;
+      bo["led_follow_mode"] = h.dinButtons[b].ledFollowMode;
+      bo["led_follow_power"] = (h.dinButtons[b].ledFollowMode != 0);
     }
   }
 
@@ -600,7 +621,8 @@ void clearConfig() {
       h.customTemps[t].code = "";
     }
     h.customTempCount = 0;
-    h.dinKeypadId = 0;
+    h.dinKeypadCount = 0;
+    for (uint8_t k = 0; k < kMaxDinplugKeypads; k++) h.dinKeypadIds[k] = 0;
     h.dinButtonCount = 0;
   }
   config.hvacCount = 0;
@@ -702,17 +724,42 @@ void loadConfig() {
       }
       JsonObject dinplug = o["dinplug"];
       if (!dinplug.isNull()) {
-        h.dinKeypadId = dinplug["keypad_id"] | 0;
+        JsonArray keypads = dinplug["keypads"];
+        if (!keypads.isNull()) {
+          for (JsonVariant kv : keypads) {
+            if (h.dinKeypadCount >= kMaxDinplugKeypads) break;
+            uint16_t keypadId = kv | 0;
+            if (keypadId == 0) continue;
+            h.dinKeypadIds[h.dinKeypadCount++] = keypadId;
+          }
+        }
+        if (h.dinKeypadCount == 0) {
+          String keypadCsv = dinplug["keypad_ids"] | "";
+          if (keypadCsv.length() > 0) {
+            parseDinKeypadsCsv(keypadCsv, h);
+          } else {
+            uint16_t legacyKeypad = dinplug["keypad_id"] | 0;
+            if (legacyKeypad > 0) {
+              h.dinKeypadIds[0] = legacyKeypad;
+              h.dinKeypadCount = 1;
+            }
+          }
+        }
         JsonArray btns = dinplug["buttons"];
         if (!btns.isNull()) {
           for (JsonObject bo : btns) {
             if (h.dinButtonCount >= kMaxDinplugButtons) break;
             DinplugButtonBinding &b = h.dinButtons[h.dinButtonCount++];
+            b.keypadId = bo["keypad_id"] | 0;
             b.buttonId = bo["id"] | 0;
             b.pressAction = bo["press_action"] | "none";
             b.pressValue = bo["press_value"] | 1.0f;
             b.holdAction = bo["hold_action"] | "none";
             b.holdValue = bo["hold_value"] | 1.0f;
+            b.togglePowerMode = bo["toggle_power_mode"] | "auto";
+            b.ledFollowMode = bo["led_follow_mode"] | 0;
+            if (b.ledFollowMode > 2) b.ledFollowMode = 0;
+            if (b.ledFollowMode == 0 && (bo["led_follow_power"] | false)) b.ledFollowMode = 2;
           }
         }
       }
@@ -826,6 +873,16 @@ bool hvacStateChanged(const HvacRuntimeState &a, const HvacRuntimeState &b) {
   return false;
 }
 
+void logHvacStateChange(const String &id, const HvacRuntimeState &after, int8_t sourceTelnetSlot) {
+  if (!telnetMonitorEnabled) return;
+  if (sourceTelnetSlot >= 0) return;
+  JsonDocument msg;
+  writeStateJson(msg.to<JsonObject>(), id, after);
+  String payload;
+  serializeJson(msg, payload);
+  addMonitorLogEntry("TX state " + payload);
+}
+
 void ensureHvacStateInitialized(uint8_t idx) {
   if (idx >= kMaxHvacs) return;
   if (hvacStates[idx].initialized) return;
@@ -857,13 +914,21 @@ bool applyDinplugAction(uint8_t hvacIndex, const DinplugButtonBinding &binding, 
   HvacConfig &hvac = config.hvacs[hvacIndex];
   String action = isHold ? binding.holdAction : binding.pressAction;
   float value = isHold ? binding.holdValue : binding.pressValue;
+  String toggleMode = binding.togglePowerMode;
+  toggleMode.toLowerCase();
+  if (toggleMode != "cool" && toggleMode != "heat" && toggleMode != "dry" &&
+      toggleMode != "fan" && toggleMode != "auto") {
+    toggleMode = "auto";
+  }
   action.toLowerCase();
   if (action == "none" || action.length() == 0) return false;
 
   JsonDocument cmd;
   cmd["cmd"] = "send";
   cmd["id"] = hvac.id;
-  cmd["mode"] = state.mode;
+  String baseMode = state.mode;
+  if (baseMode.length() == 0 || baseMode == "off") baseMode = "auto";
+  cmd["mode"] = baseMode;
   cmd["fan"] = state.fan;
   cmd["power"] = state.power ? "on" : "off";
   cmd["temp"] = state.setpoint;
@@ -888,7 +953,9 @@ bool applyDinplugAction(uint8_t hvacIndex, const DinplugButtonBinding &binding, 
   } else if (action == "power_off") {
     cmd["power"] = "off";
   } else if (action == "toggle_power") {
-    cmd["power"] = state.power ? "off" : "on";
+    bool turnOn = !state.power;
+    cmd["power"] = turnOn ? "on" : "off";
+    if (turnOn) cmd["mode"] = toggleMode;
   } else if (action == "mode_heat") {
     cmd["mode"] = "heat";
     cmd["power"] = "on";
@@ -980,16 +1047,90 @@ String dinActionOptionsHtml(const String &selected) {
   return out;
 }
 
+String dinToggleModeOptionsHtml(const String &selectedIn) {
+  String selected = selectedIn;
+  selected.toLowerCase();
+  if (selected.length() == 0) selected = "auto";
+  const char *modes[] = {"auto", "cool", "heat", "dry", "fan"};
+  const size_t count = sizeof(modes) / sizeof(modes[0]);
+  String out;
+  for (size_t i = 0; i < count; i++) {
+    String mode = modes[i];
+    out += "<option value='" + mode + "'";
+    if (selected == mode) out += " selected";
+    out += ">" + mode + "</option>";
+  }
+  return out;
+}
+
+bool dinActionUsesValue(const String &actionIn) {
+  String action = actionIn;
+  action.toLowerCase();
+  return action == "temp_up" || action == "temp_down" || action == "set_temp";
+}
+
+String dinKeypadsCsv(const HvacConfig &h) {
+  String out;
+  for (uint8_t i = 0; i < h.dinKeypadCount; i++) {
+    if (h.dinKeypadIds[i] == 0) continue;
+    if (out.length()) out += ",";
+    out += String(h.dinKeypadIds[i]);
+  }
+  return out;
+}
+
+void parseDinKeypadsCsv(const String &csvIn, HvacConfig &h) {
+  h.dinKeypadCount = 0;
+  for (uint8_t i = 0; i < kMaxDinplugKeypads; i++) h.dinKeypadIds[i] = 0;
+  String csv = csvIn;
+  csv.trim();
+  if (csv.length() == 0) return;
+  int start = 0;
+  while (start <= csv.length()) {
+    int comma = csv.indexOf(',', start);
+    if (comma < 0) comma = csv.length();
+    String token = csv.substring(start, comma);
+    token.trim();
+    if (token.length() > 0) {
+      int parsed = token.toInt();
+      if (parsed > 0 && parsed <= 65535) {
+        uint16_t keypadId = static_cast<uint16_t>(parsed);
+        bool exists = false;
+        for (uint8_t i = 0; i < h.dinKeypadCount; i++) {
+          if (h.dinKeypadIds[i] == keypadId) { exists = true; break; }
+        }
+        if (!exists && h.dinKeypadCount < kMaxDinplugKeypads) {
+          h.dinKeypadIds[h.dinKeypadCount++] = keypadId;
+        }
+      }
+    }
+    if (comma >= csv.length()) break;
+    start = comma + 1;
+  }
+}
+
+bool hvacHasDinKeypad(const HvacConfig &h, uint16_t keypadId) {
+  if (keypadId == 0) return false;
+  for (uint8_t i = 0; i < h.dinKeypadCount; i++) {
+    if (h.dinKeypadIds[i] == keypadId) return true;
+  }
+  return false;
+}
+
 String dinButtonsJson(const HvacConfig &h) {
   DynamicJsonDocument doc(512);
   JsonArray arr = doc.to<JsonArray>();
   for (uint8_t i = 0; i < h.dinButtonCount; i++) {
     JsonObject o = arr.add<JsonObject>();
+    o["keypad_id"] = h.dinButtons[i].keypadId;
     o["id"] = h.dinButtons[i].buttonId;
     o["press_action"] = h.dinButtons[i].pressAction;
     o["press_value"] = h.dinButtons[i].pressValue;
     o["hold_action"] = h.dinButtons[i].holdAction;
     o["hold_value"] = h.dinButtons[i].holdValue;
+    o["toggle_power_mode"] = h.dinButtons[i].togglePowerMode;
+    o["led_follow_mode"] = h.dinButtons[i].ledFollowMode;
+    o["led_follow_power"] = (h.dinButtons[i].ledFollowMode != 0);
   }
   String out;
   serializeJson(doc, out);
@@ -1042,6 +1183,13 @@ String pageHeader(const String &title) {
   html += ".row{display:flex;align-items:center;gap:8px;}";
   html += ".row input[type='checkbox']{width:auto;margin:0;}";
   html += "table{border-collapse:collapse;width:100%;}th,td{border:1px solid #334155;padding:8px;text-align:left;}";
+  html += ".din-actions{table-layout:fixed;}";
+  html += ".din-actions th,.din-actions td{vertical-align:middle;}";
+  html += ".din-actions input,.din-actions select{width:100%;min-width:0;box-sizing:border-box;}";
+  html += ".din-actions .din-id{max-width:90px;}";
+  html += ".din-actions .din-val{max-width:90px;}";
+  html += ".din-actions .din-action{max-width:170px;}";
+  html += ".din-actions .din-led{width:auto;}";
   html += "code,pre{background:#0b1220;border:1px solid #334155;border-radius:8px;padding:8px;display:block;white-space:pre-wrap;}";
   html += ".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;}";
   html += ".pill{display:inline-block;background:#1e293b;color:#e2e8f0;padding:2px 8px;border-radius:999px;font-size:12px;margin-left:6px;}";
@@ -1344,24 +1492,31 @@ void handleHvacsPage() {
       const HvacConfig &h = config.hvacs[i];
       html += "<option value='" + String(i) + "' data-protocol='" + htmlEscape(h.protocol) +
               "' data-emitter='" + String(h.emitterIndex) + "' data-model='" + String(h.model) +
-              "' data-keypad='" + String(h.dinKeypadId) + "' data-buttons='" + htmlEscape(dinButtonsJson(h)) + "'>";
+              "' data-keypads='" + htmlEscape(dinKeypadsCsv(h)) + "' data-buttons='" + htmlEscape(dinButtonsJson(h)) + "'>";
       html += htmlEscape(h.id) + " (" + htmlEscape(h.protocol) + ")</option>";
     }
     html += "</select>";
     html += "<label>Protocol</label><select name='protocol' id='editHvacProtocol'>" + protocolOptionsHtml("") + "</select>";
     html += "<label>Emitter</label><select name='emitter' id='editHvacEmitter'>" + emitterOptionsHtml(0) + "</select>";
     html += "<label>Model (optional)</label><input name='model' id='editHvacModel' value='-1'>";
-    html += "<label>DINplug Keypad ID</label><input name='din_keypad_id' id='dinKeypad' type='number' min='0' value='0'>";
+    html += "<label>DINplug Keypad IDs (comma-separated)</label><input name='din_keypad_ids' id='dinKeypads' value=''>";
     html += "<h4>Keypad Button Actions</h4>";
-    html += "<table><tr><th>#</th><th>Button ID</th><th>Press Action</th><th>Press Value</th><th>Hold Action</th><th>Hold Value</th></tr>";
+    html += "<table class='din-actions'><tr><th>#</th><th>Keypad ID</th><th>Button ID</th><th>Press Action</th><th>Press Value</th><th>Hold Action</th><th>Hold Value</th><th>Toggle Power Mode</th><th>LED follows HVAC power</th></tr>";
     for (uint8_t b = 0; b < kMaxDinplugButtons; b++) {
       html += "<tr data-btn-row='" + String(b) + "'>";
       html += "<td>" + String(b + 1) + "</td>";
-      html += "<td><input name='btn" + String(b) + "_id' type='number' min='0' value='0'></td>";
-      html += "<td><select name='btn" + String(b) + "_press_action'>" + dinActionOptionsHtml("none") + "</select></td>";
-      html += "<td><input name='btn" + String(b) + "_press_value' type='number' step='0.5' value='1'></td>";
-      html += "<td><select name='btn" + String(b) + "_hold_action'>" + dinActionOptionsHtml("none") + "</select></td>";
-      html += "<td><input name='btn" + String(b) + "_hold_value' type='number' step='0.5' value='1'></td>";
+      html += "<td><input class='din-id' name='btn" + String(b) + "_keypad_id' type='number' min='0' value='0'></td>";
+      html += "<td><input class='din-id' name='btn" + String(b) + "_id' type='number' min='0' value='0'></td>";
+      html += "<td><select class='din-action' name='btn" + String(b) + "_press_action'>" + dinActionOptionsHtml("none") + "</select></td>";
+      html += "<td><input class='din-val' name='btn" + String(b) + "_press_value' type='number' step='0.5' value='1'></td>";
+      html += "<td><select class='din-action' name='btn" + String(b) + "_hold_action'>" + dinActionOptionsHtml("none") + "</select></td>";
+      html += "<td><input class='din-val' name='btn" + String(b) + "_hold_value' type='number' step='0.5' value='1'></td>";
+      html += "<td><select class='din-action' name='btn" + String(b) + "_toggle_power_mode'>" + dinToggleModeOptionsHtml("auto") + "</select></td>";
+      html += "<td><select class='din-action' name='btn" + String(b) + "_led_follow_mode'>";
+      html += "<option value='0'>disabled</option>";
+      html += "<option value='1'>LED on when HVAC on</option>";
+      html += "<option value='2'>LED on when HVAC off</option>";
+      html += "</select></td>";
       html += "</tr>";
     }
     html += "</table>";
@@ -1371,27 +1526,39 @@ void handleHvacsPage() {
     html += "const protoSel=document.getElementById('editHvacProtocol');";
     html += "const emSel=document.getElementById('editHvacEmitter');";
     html += "const modelInput=document.getElementById('editHvacModel');";
-    html += "const keypadInput=document.getElementById('dinKeypad');";
+    html += "const keypadsInput=document.getElementById('dinKeypads');";
     html += "const btnRows=[...document.querySelectorAll('[data-btn-row]')];";
+    html += "const needsValue=(a)=>['temp_up','temp_down','set_temp'].includes((a||'').toLowerCase());";
+    html += "const syncValueEnabled=(act,val)=>{if(!act||!val)return;const on=needsValue(act.value);val.disabled=!on;if(!on&&(!val.value||val.value==='0'))val.value='1';};";
     html += "const sync=()=>{if(!hvacSel)return;const opt=hvacSel.selectedOptions[0];";
     html += "if(!opt)return;const p=opt.dataset.protocol||'';";
     html += "const e=opt.dataset.emitter||'0';const m=opt.dataset.model||'-1';";
-    html += "const k=opt.dataset.keypad||'0';const btnJson=opt.dataset.buttons||'[]';";
+    html += "const ks=opt.dataset.keypads||'';const btnJson=opt.dataset.buttons||'[]';";
     html += "if(protoSel){for(const o of protoSel.options){o.selected=(o.value===p);} }";
     html += "if(emSel){for(const o of emSel.options){o.selected=(o.value===e);} }";
-    html += "if(modelInput){modelInput.value=m;}if(keypadInput){keypadInput.value=k;}";
+    html += "if(modelInput){modelInput.value=m;}if(keypadsInput){keypadsInput.value=ks;}";
     html += "let parsed=[];try{parsed=JSON.parse(btnJson);}catch(err){parsed=[];}";
     html += "btnRows.forEach((row,idx)=>{const data=parsed[idx]||{};";
+    html += "const kInput=row.querySelector(`input[name='btn${idx}_keypad_id']`);";
     html += "const idInput=row.querySelector(`input[name='btn${idx}_id']`);";
     html += "const pAct=row.querySelector(`select[name='btn${idx}_press_action']`);";
     html += "const pVal=row.querySelector(`input[name='btn${idx}_press_value']`);";
     html += "const hAct=row.querySelector(`select[name='btn${idx}_hold_action']`);";
     html += "const hVal=row.querySelector(`input[name='btn${idx}_hold_value']`);";
+    html += "const tMode=row.querySelector(`select[name='btn${idx}_toggle_power_mode']`);";
+    html += "const ledMode=row.querySelector(`select[name='btn${idx}_led_follow_mode']`);";
+    html += "if(kInput)kInput.value=data.keypad_id||0;";
     html += "if(idInput)idInput.value=data.id||0;";
     html += "if(pAct)pAct.value=data.press_action||'none';";
     html += "if(pVal)pVal.value=data.press_value!=null?data.press_value:1;";
     html += "if(hAct)hAct.value=data.hold_action||'none';";
-    html += "if(hVal)hVal.value=data.hold_value!=null?data.hold_value:1;});};";
+    html += "if(hVal)hVal.value=data.hold_value!=null?data.hold_value:1;";
+    html += "if(tMode){const tm=(data.toggle_power_mode||'auto').toLowerCase();tMode.value=(['auto','cool','heat','dry','fan'].includes(tm)?tm:'auto');}";
+    html += "if(ledMode){const m=(data.led_follow_mode!=null?String(data.led_follow_mode):(data.led_follow_power?'2':'0'));ledMode.value=(m==='1'||m==='2')?m:'0';}";
+    html += "syncValueEnabled(pAct,pVal);syncValueEnabled(hAct,hVal);";
+    html += "if(pAct&&pVal){pAct.onchange=()=>syncValueEnabled(pAct,pVal);}";
+    html += "if(hAct&&hVal){hAct.onchange=()=>syncValueEnabled(hAct,hVal);}";
+    html += "});};";
     html += "if(hvacSel){hvacSel.addEventListener('change',sync);sync();}";
     html += "</script>";
   }
@@ -1463,22 +1630,35 @@ void handleHvacsUpdate() {
   h.emitterIndex = emitterIndex;
   h.model = model;
   h.isCustom = (protocol == "CUSTOM");
-  h.dinKeypadId = web.arg("din_keypad_id").toInt();
+  String keypadCsv = web.arg("din_keypad_ids");
+  if (keypadCsv.length() == 0) keypadCsv = web.arg("din_keypad_id");
+  parseDinKeypadsCsv(keypadCsv, h);
   h.dinButtonCount = 0;
   for (uint8_t i = 0; i < kMaxDinplugButtons; i++) {
     String base = "btn" + String(i) + "_";
+    uint16_t keypadId = web.arg(base + "keypad_id").toInt();
     uint16_t btnId = web.arg(base + "id").toInt();
     if (btnId == 0) continue;
     DinplugButtonBinding &b = h.dinButtons[h.dinButtonCount++];
+    b.keypadId = keypadId;
     b.buttonId = btnId;
     b.pressAction = web.arg(base + "press_action");
     if (!b.pressAction.length()) b.pressAction = "none";
-    b.pressValue = web.arg(base + "press_value").toFloat();
+    b.pressValue = dinActionUsesValue(b.pressAction) ? web.arg(base + "press_value").toFloat() : 1.0f;
     if (b.pressValue == 0) b.pressValue = 1.0f;
     b.holdAction = web.arg(base + "hold_action");
     if (!b.holdAction.length()) b.holdAction = "none";
-    b.holdValue = web.arg(base + "hold_value").toFloat();
+    b.holdValue = dinActionUsesValue(b.holdAction) ? web.arg(base + "hold_value").toFloat() : 1.0f;
     if (b.holdValue == 0) b.holdValue = 1.0f;
+    b.togglePowerMode = web.arg(base + "toggle_power_mode");
+    b.togglePowerMode.toLowerCase();
+    if (b.togglePowerMode != "auto" && b.togglePowerMode != "cool" && b.togglePowerMode != "heat" &&
+        b.togglePowerMode != "dry" && b.togglePowerMode != "fan") {
+      b.togglePowerMode = "auto";
+    }
+    uint8_t ledMode = static_cast<uint8_t>(web.arg(base + "led_follow_mode").toInt());
+    if (ledMode > 2) ledMode = 0;
+    b.ledFollowMode = ledMode;
     if (h.dinButtonCount >= kMaxDinplugButtons) break;
   }
   resetHvacRuntimeState(static_cast<uint8_t>(idx));
@@ -1853,6 +2033,8 @@ bool processCommand(JsonDocument &doc, JsonDocument &resp, int8_t sourceTelnetSl
     hvacStates[hvacIndex] = nextState;
     writeStateJson(resp.to<JsonObject>(), id, hvacStates[hvacIndex]);
     if (hvacStateChanged(previous, hvacStates[hvacIndex])) {
+      syncDinplugLedsForHvac(hvacIndex);
+      logHvacStateChange(id, hvacStates[hvacIndex], sourceTelnetSlot);
       broadcastStateToTelnetClients(id, hvacStates[hvacIndex], sourceTelnetSlot);
     }
     return ok;
@@ -1915,6 +2097,8 @@ bool processCommand(JsonDocument &doc, JsonDocument &resp, int8_t sourceTelnetSl
   hvacStates[hvacIndex] = nextState;
   writeStateJson(resp.to<JsonObject>(), id, hvacStates[hvacIndex]);
   if (hvacStateChanged(previous, hvacStates[hvacIndex])) {
+    syncDinplugLedsForHvac(hvacIndex);
+    logHvacStateChange(id, hvacStates[hvacIndex], sourceTelnetSlot);
     broadcastStateToTelnetClients(id, hvacStates[hvacIndex], sourceTelnetSlot);
   }
   return ok;
@@ -2087,6 +2271,31 @@ bool sendDinplugCommand(const String &cmd) {
   return true;
 }
 
+bool setDinplugLed(uint16_t keypadId, uint16_t ledId, uint8_t state) {
+  if (keypadId == 0 || ledId == 0) return false;
+  if (state > 3) return false;
+  return sendDinplugCommand("LED " + String(keypadId) + " " + String(ledId) + " " + String(state));
+}
+
+void syncDinplugLedsForHvac(uint8_t hvacIndex) {
+  if (hvacIndex >= config.hvacCount) return;
+  const HvacConfig &h = config.hvacs[hvacIndex];
+  const HvacRuntimeState &state = hvacStates[hvacIndex];
+  for (uint8_t i = 0; i < h.dinButtonCount; i++) {
+    const DinplugButtonBinding &b = h.dinButtons[i];
+    if (b.ledFollowMode == 0 || b.buttonId == 0) continue;
+    const uint8_t ledState = (b.ledFollowMode == 1) ? (state.power ? 1 : 0) : (state.power ? 0 : 1);
+    if (b.keypadId != 0) {
+      setDinplugLed(b.keypadId, b.buttonId, ledState);
+      continue;
+    }
+    for (uint8_t k = 0; k < h.dinKeypadCount; k++) {
+      if (h.dinKeypadIds[k] == 0) continue;
+      setDinplugLed(h.dinKeypadIds[k], b.buttonId, ledState);
+    }
+  }
+}
+
 void ensureDinplugConnected(bool forceNow) {
   String gatewayHost = config.dinplug.gatewayHost;
   gatewayHost.trim();
@@ -2119,10 +2328,11 @@ void handleDinplugButtonEvent(uint16_t keypadId, uint16_t buttonId, const String
   bool isHold = (action == "HOLD");
   for (uint8_t i = 0; i < config.hvacCount; i++) {
     const HvacConfig &h = config.hvacs[i];
-    if (h.dinKeypadId == 0 || h.dinKeypadId != keypadId) continue;
+    if (!hvacHasDinKeypad(h, keypadId)) continue;
     for (uint8_t b = 0; b < h.dinButtonCount; b++) {
       const DinplugButtonBinding &bind = h.dinButtons[b];
       if (bind.buttonId != buttonId) continue;
+      if (bind.keypadId != 0 && bind.keypadId != keypadId) continue;
       if (applyDinplugAction(i, bind, isHold)) {
         Serial.print("dinplug: applied action to hvac ");
         Serial.println(h.id);

@@ -6,6 +6,7 @@ This example provides:
 - OTA firmware updates via ArduinoOTA and web firmware upload.
 - Optional web UI authentication (admin password) and a built-in HVAC test page.
 - Raw IR send support for Pronto, GlobalCache, and Racepoint hex formats.
+- DINplug telnet integration for keypad-driven HVAC actions, including per-button LED follow modes.
 
 ## Quick start
 - Build for `esp32dev` with PlatformIO using `examples/HvacTelnetServer/platformio.ini`.
@@ -15,8 +16,10 @@ This example provides:
 ## Web UI capabilities
 - **Config** (`/config`): WiFi, hostname, telnet port, optional web password.
 - **Emitters** (`/emitters`): add/remove IR LED GPIOs.
-- **HVACs** (`/hvacs`): register and edit HVAC entries (protocol, emitter, model).
+- **HVACs** (`/hvacs`): register and edit HVAC entries (protocol, emitter, model), DINplug keypads, and keypad button actions.
 - **Test HVAC** (`/hvacs/test`): send a JSON command from the browser, including `light`.
+- **DINplug** (`/dinplug`): configure DINplug gateway (`IP` or DNS hostname), connect-on-boot, and test connection.
+- **Monitor** (`/monitor`): live telnet monitor log for RX/TX and DINplug activity.
 - **Config backup**: download/upload `/config.json` at `/config/download` and `/config/upload`.
 - **Firmware OTA** (`/firmware`): upload a `.bin` firmware image from the browser.
 
@@ -77,6 +80,36 @@ Behavior notes:
 - `get_all` returns a JSON array of `type:"state"` objects.
 - On telnet client connect/reconnect, the server immediately pushes one `type:"state"` line for each registered HVAC.
 - `current_temp` mirrors `setpoint` (no ambient sensor input).
+- When HVAC state changes from non-telnet sources (e.g. DINplug keypad actions), monitor logs include `TX state {...}` JSON entries.
+
+## DINplug integration
+- Gateway supports `IP` or DNS hostname (e.g. DynDNS): set in `/dinplug`.
+- `Test connection` button at `/dinplug` forces an immediate connect attempt and reports success/failure.
+- Auto-connect on boot is optional.
+- DINplug button events supported for HVAC automation: `PRESS` and `HOLD`.
+
+HVAC editor (`/hvacs`) DINplug fields:
+- `DINplug Keypad IDs (comma-separated)`: links one HVAC to multiple keypads.
+- Keypad Button Actions table per row:
+  - `Keypad ID`: optional per-row keypad filter. `0` means match any linked keypad.
+  - `Button ID`: DINplug button/LED numeric id.
+  - `Press/Hold Action` + `Value`: `Value` is used only for `temp_up`, `temp_down`, `set_temp`.
+  - `Toggle Power Mode`: mode used when `toggle_power` turns the HVAC on (`auto`, `cool`, `heat`, `dry`, `fan`).
+  - `LED follows HVAC power`:
+    - `disabled`
+    - `LED on when HVAC on`
+    - `LED on when HVAC off`
+
+DINplug action list:
+- `none`
+- `temp_up`, `temp_down`, `set_temp`
+- `power_on`, `power_off`, `toggle_power`
+- `mode_heat`, `mode_cool`, `mode_fan`, `mode_auto`, `mode_off`
+
+LED follow implementation notes:
+- Uses DINplug command `LED <keypad_id> <led_id> <state>`.
+- `led_id` is taken from the row `Button ID`.
+- If row `Keypad ID` is `0`, LED command is sent to all linked keypad IDs for that HVAC.
 
 ## Custom HVAC entries via config.json
 Custom HVAC registrations are supported in the saved config (upload/download format). A custom
