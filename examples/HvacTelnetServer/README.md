@@ -14,9 +14,9 @@ This example provides:
 - Browse to `http://192.168.4.1/` and configure WiFi, emitters, and HVAC entries.
 
 ## Web UI capabilities
-- **Config** (`/config`): WiFi, hostname, telnet port, optional web password.
+- **Config** (`/config`): WiFi, hostname, telnet port, optional web password, WireGuard, and DS18B20 bus settings.
 - **Emitters** (`/emitters`): add/remove IR LED GPIOs.
-- **HVACs** (`/hvacs`): register and edit HVAC entries (protocol, emitter, model), DINplug keypads, and keypad button actions.
+- **HVACs** (`/hvacs`): register and edit HVAC entries (protocol, emitter, model), current temperature source policy, DINplug keypads, and keypad button actions.
 - **Test HVAC** (`/hvacs/test`): send a JSON command from the browser, including `light`.
 - **DINplug** (`/dinplug`): configure DINplug gateway (`IP` or DNS hostname), connect-on-boot, and test connection.
 - **Monitor** (`/monitor`): live telnet monitor log for RX/TX and DINplug activity.
@@ -79,8 +79,21 @@ Behavior notes:
 - `get` returns one `type:"state"` object.
 - `get_all` returns a JSON array of `type:"state"` objects.
 - On telnet client connect/reconnect, the server immediately pushes one `type:"state"` line for each registered HVAC.
-- `current_temp` mirrors `setpoint` (no ambient sensor input).
+- `current_temp` is per-HVAC configurable:
+  - `setpoint`: current temp equals setpoint.
+  - `sensor`: current temp comes from DS18B20 sensor index configured for that HVAC (fallback to setpoint if sensor is unavailable).
 - When HVAC state changes from non-telnet sources (e.g. DINplug keypad actions), monitor logs include `TX state {...}` JSON entries.
+
+## DS18B20 temperature sensors
+Configure DS18B20 in **Config** (`/config`):
+- Enable/disable DS18B20 bus.
+- OneWire GPIO pin.
+- Sensor read interval (seconds).
+
+At runtime:
+- The firmware discovers sensors on boot and stores them by index (`0..N-1`).
+- HVAC entries can select `Current Temp Source` (`setpoint` or `sensor`) and `DS18B20 Sensor Index`.
+- Sensor-driven temperature updates are periodically reflected in HVAC state and broadcast to telnet clients.
 
 ## DINplug integration
 - Gateway supports `IP` or DNS hostname (e.g. DynDNS): set in `/dinplug`.
@@ -125,6 +138,8 @@ Example snippet:
       "protocol": "CUSTOM",
       "emitter": 0,
       "model": -1,
+      "current_temp_source": "sensor",
+      "temp_sensor_index": 0,
       "custom": {
         "encoding": "pronto",
         "off": "0000 006D ...",

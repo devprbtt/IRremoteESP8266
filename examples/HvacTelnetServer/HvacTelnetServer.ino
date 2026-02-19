@@ -13,6 +13,8 @@
 #include <WireGuard-ESP32.h>
 #include <time.h>
 #include <esp_system.h>
+#include <OneWire.h>
+#include <DallasTemperature.h>
 
 extern "C" {
 #include "wireguard.h"
@@ -35,6 +37,7 @@ static const unsigned long kDinplugReconnectIntervalMs = 5000;
 static const unsigned long kDinplugKeepAliveIntervalMs = 10000;
 static const uint8_t kMaxDinplugButtons = 8;
 static const uint8_t kMaxDinplugKeypads = 8;
+static const uint8_t kMaxTempSensors = 8;
 
 static const char *kConfigPath = "/config.json";
 static const char *kApSsid = "IR-HVAC-Setup";
@@ -70,6 +73,8 @@ struct HvacConfig {
   uint8_t dinKeypadCount = 0;
   DinplugButtonBinding dinButtons[kMaxDinplugButtons];
   uint8_t dinButtonCount = 0;
+  String currentTempSource = "setpoint";  // "setpoint" or "sensor"
+  uint8_t tempSensorIndex = 0;            // Index on DS18B20 one-wire bus.
 };
 
 struct WifiConfig {
@@ -100,11 +105,18 @@ struct DinplugConfig {
   bool autoConnect = false;
 };
 
+struct TempSensorConfig {
+  bool enabled = false;
+  uint8_t gpio = 4;
+  uint16_t readIntervalSec = 10;
+};
+
 struct Config {
   WifiConfig wifi;
   WebConfig web;
   WireGuardConfig wg;
   DinplugConfig dinplug;
+  TempSensorConfig tempSensors;
   String hostname;
   uint16_t telnetPort = kDefaultTelnetPort;
   uint16_t emitterGpios[kMaxEmitters];
@@ -152,6 +164,13 @@ uint16_t telnetMonitorLogCount = 0;
 WireGuard wgClient;
 bool wgConnected = false;
 unsigned long wgLastAttemptMs = 0;
+OneWire *tempOneWire = nullptr;
+DallasTemperature *tempBus = nullptr;
+uint8_t tempSensorCount = 0;
+DeviceAddress tempSensorAddresses[kMaxTempSensors];
+float tempSensorReadings[kMaxTempSensors];
+bool tempSensorValid[kMaxTempSensors];
+unsigned long tempLastReadMs = 0;
 
 static const uint16_t kDefaultWireGuardPort = 51820;
 static const unsigned long kWireGuardRetryIntervalMs = 30000;
@@ -187,6 +206,10 @@ bool hvacHasDinKeypad(const HvacConfig &h, uint16_t keypadId);
 void logHvacStateChange(const String &id, const HvacRuntimeState &after, int8_t sourceTelnetSlot);
 bool setDinplugLed(uint16_t keypadId, uint16_t ledId, uint8_t state);
 void syncDinplugLedsForHvac(uint8_t hvacIndex);
+void setupTemperatureSensors();
+void readTemperatureSensors();
+void handleTemperatureSensors();
+bool hvacUsesSensorTemp(const HvacConfig &h);
 
 // ---- Helpers ----
 
@@ -521,6 +544,11 @@ String configToJsonString() {
   din["gateway_ip"] = gatewayIp.fromString(gatewayHost) ? gatewayIp.toString() : "";
   din["auto_connect"] = config.dinplug.autoConnect;
 
+  JsonObject ts = doc["temp_sensors"].to<JsonObject>();
+  ts["enabled"] = config.tempSensors.enabled;
+  ts["gpio"] = config.tempSensors.gpio;
+  ts["read_interval_sec"] = config.tempSensors.readIntervalSec;
+
   doc["hostname"] = config.hostname.length() ? config.hostname : kDefaultHostname;
   doc["telnet_port"] = config.telnetPort;
 
@@ -538,6 +566,8 @@ String configToJsonString() {
     o["protocol"] = h.protocol;
     o["emitter"] = h.emitterIndex;
     o["model"] = h.model;
+    o["current_temp_source"] = h.currentTempSource;
+    o["temp_sensor_index"] = h.tempSensorIndex;
     if (h.isCustom) {
       JsonObject c = o["custom"].to<JsonObject>();
       c["encoding"] = h.customEncoding;
@@ -601,6 +631,9 @@ void clearConfig() {
   config.wg.endpointPort = kDefaultWireGuardPort;
   config.dinplug.gatewayHost = "";
   config.dinplug.autoConnect = false;
+  config.tempSensors.enabled = false;
+  config.tempSensors.gpio = 4;
+  config.tempSensors.readIntervalSec = 10;
   config.hostname = kDefaultHostname;
   config.telnetPort = kDefaultTelnetPort;
   for (uint8_t i = 0; i < kMaxEmitters; i++) {
@@ -624,6 +657,8 @@ void clearConfig() {
     h.dinKeypadCount = 0;
     for (uint8_t k = 0; k < kMaxDinplugKeypads; k++) h.dinKeypadIds[k] = 0;
     h.dinButtonCount = 0;
+    h.currentTempSource = "setpoint";
+    h.tempSensorIndex = 0;
   }
   config.hvacCount = 0;
   initHvacRuntimeStates();
@@ -683,6 +718,13 @@ void loadConfig() {
     config.dinplug.gatewayHost = gatewayHost;
     config.dinplug.autoConnect = din["auto_connect"] | false;
   }
+  JsonObject ts = doc["temp_sensors"];
+  if (!ts.isNull()) {
+    config.tempSensors.enabled = ts["enabled"] | false;
+    config.tempSensors.gpio = ts["gpio"] | 4;
+    config.tempSensors.readIntervalSec = ts["read_interval_sec"] | 10;
+    if (config.tempSensors.readIntervalSec == 0) config.tempSensors.readIntervalSec = 10;
+  }
   bool generatedWgKey = ensureWireGuardKeypair(false);
   if (generatedWgKey) saveConfig();
 
@@ -707,6 +749,10 @@ void loadConfig() {
       h.protocol = o["protocol"] | "";
       h.emitterIndex = o["emitter"] | -1;
       h.model = o["model"] | -1;
+      h.currentTempSource = o["current_temp_source"] | "setpoint";
+      h.currentTempSource.toLowerCase();
+      if (h.currentTempSource != "sensor") h.currentTempSource = "setpoint";
+      h.tempSensorIndex = o["temp_sensor_index"] | 0;
       JsonObject c = o["custom"];
       if (!c.isNull()) {
         h.isCustom = true;
@@ -857,6 +903,12 @@ String fanToString(stdAc::fanspeed_t fan) {
   }
 }
 
+bool hvacUsesSensorTemp(const HvacConfig &h) {
+  String source = h.currentTempSource;
+  source.toLowerCase();
+  return source == "sensor";
+}
+
 bool floatChanged(float a, float b) {
   return (a > b + 0.05f) || (b > a + 0.05f);
 }
@@ -901,8 +953,7 @@ void writeStateJson(JsonObject state, const String &id, const HvacRuntimeState &
   state["power"] = hvacState.power ? "on" : "off";
   state["mode"] = hvacState.mode;
   state["setpoint"] = hvacState.setpoint;
-  // No ambient temperature sensor is available, so mirror setpoint.
-  state["current_temp"] = hvacState.setpoint;
+  state["current_temp"] = hvacState.currentTemp;
   state["fan"] = hvacState.fan;
   state["light"] = hvacState.light ? "on" : "off";
 }
@@ -1264,6 +1315,14 @@ void handleConfigPage() {
   html += "<input name='wg_endpoint_host' value='" + htmlEscape(config.wg.endpointHost) + "' placeholder='vpn.example.com'>";
   html += "<label>Peer endpoint UDP port</label>";
   html += "<input name='wg_endpoint_port' type='number' min='1' max='65535' value='" + String(config.wg.endpointPort) + "'>";
+  html += "<h3>DS18B20 Temperature Sensors</h3>";
+  html += "<div class='row'><input type='checkbox' id='tsEnabled' name='ts_enabled'" +
+          String(config.tempSensors.enabled ? " checked" : "") + "><label for='tsEnabled'>Enable DS18B20 bus</label></div>";
+  html += "<label>OneWire GPIO</label>";
+  html += "<input name='ts_gpio' type='number' min='0' max='39' value='" + String(config.tempSensors.gpio) + "'>";
+  html += "<label>Read interval (seconds)</label>";
+  html += "<input name='ts_interval' type='number' min='1' max='3600' value='" + String(config.tempSensors.readIntervalSec) + "'>";
+  html += "<p>Detected sensors at runtime: <strong>" + String(tempSensorCount) + "</strong></p>";
   html += "<button type='submit'>Save & Reboot</button>";
   html += "</form></div>";
   html += "<script>";
@@ -1304,6 +1363,13 @@ void handleConfigSave() {
   uint16_t wgPort = web.arg("wg_endpoint_port").toInt();
   if (wgPort == 0) wgPort = kDefaultWireGuardPort;
   config.wg.endpointPort = wgPort;
+  config.tempSensors.enabled = web.hasArg("ts_enabled");
+  int tsGpio = web.arg("ts_gpio").toInt();
+  if (tsGpio < 0 || tsGpio > 39) tsGpio = 4;
+  config.tempSensors.gpio = static_cast<uint8_t>(tsGpio);
+  uint16_t tsInterval = web.arg("ts_interval").toInt();
+  if (tsInterval == 0) tsInterval = 10;
+  config.tempSensors.readIntervalSec = tsInterval;
   ensureWireGuardKeypair(true);
   String hostname = web.arg("hostname");
   hostname.trim();
@@ -1492,6 +1558,7 @@ void handleHvacsPage() {
       const HvacConfig &h = config.hvacs[i];
       html += "<option value='" + String(i) + "' data-protocol='" + htmlEscape(h.protocol) +
               "' data-emitter='" + String(h.emitterIndex) + "' data-model='" + String(h.model) +
+              "' data-ctsrc='" + htmlEscape(h.currentTempSource) + "' data-tsidx='" + String(h.tempSensorIndex) +
               "' data-keypads='" + htmlEscape(dinKeypadsCsv(h)) + "' data-buttons='" + htmlEscape(dinButtonsJson(h)) + "'>";
       html += htmlEscape(h.id) + " (" + htmlEscape(h.protocol) + ")</option>";
     }
@@ -1499,6 +1566,11 @@ void handleHvacsPage() {
     html += "<label>Protocol</label><select name='protocol' id='editHvacProtocol'>" + protocolOptionsHtml("") + "</select>";
     html += "<label>Emitter</label><select name='emitter' id='editHvacEmitter'>" + emitterOptionsHtml(0) + "</select>";
     html += "<label>Model (optional)</label><input name='model' id='editHvacModel' value='-1'>";
+    html += "<label>Current Temp Source</label><select name='current_temp_source' id='editCurrentTempSource'>";
+    html += "<option value='setpoint'>setpoint</option>";
+    html += "<option value='sensor'>sensor</option>";
+    html += "</select>";
+    html += "<label>DS18B20 Sensor Index</label><input name='temp_sensor_index' id='editTempSensorIndex' type='number' min='0' max='" + String(kMaxTempSensors - 1) + "' value='0'>";
     html += "<label>DINplug Keypad IDs (comma-separated)</label><input name='din_keypad_ids' id='dinKeypads' value=''>";
     html += "<h4>Keypad Button Actions</h4>";
     html += "<table class='din-actions'><tr><th>#</th><th>Keypad ID</th><th>Button ID</th><th>Press Action</th><th>Press Value</th><th>Hold Action</th><th>Hold Value</th><th>Toggle Power Mode</th><th>LED follows HVAC power</th></tr>";
@@ -1526,16 +1598,20 @@ void handleHvacsPage() {
     html += "const protoSel=document.getElementById('editHvacProtocol');";
     html += "const emSel=document.getElementById('editHvacEmitter');";
     html += "const modelInput=document.getElementById('editHvacModel');";
+    html += "const ctSrc=document.getElementById('editCurrentTempSource');";
+    html += "const tsIdx=document.getElementById('editTempSensorIndex');";
     html += "const keypadsInput=document.getElementById('dinKeypads');";
     html += "const btnRows=[...document.querySelectorAll('[data-btn-row]')];";
     html += "const needsValue=(a)=>['temp_up','temp_down','set_temp'].includes((a||'').toLowerCase());";
     html += "const syncValueEnabled=(act,val)=>{if(!act||!val)return;const on=needsValue(act.value);val.disabled=!on;if(!on&&(!val.value||val.value==='0'))val.value='1';};";
     html += "const sync=()=>{if(!hvacSel)return;const opt=hvacSel.selectedOptions[0];";
     html += "if(!opt)return;const p=opt.dataset.protocol||'';";
-    html += "const e=opt.dataset.emitter||'0';const m=opt.dataset.model||'-1';";
+    html += "const e=opt.dataset.emitter||'0';const m=opt.dataset.model||'-1';const cts=opt.dataset.ctsrc||'setpoint';const tsi=opt.dataset.tsidx||'0';";
     html += "const ks=opt.dataset.keypads||'';const btnJson=opt.dataset.buttons||'[]';";
     html += "if(protoSel){for(const o of protoSel.options){o.selected=(o.value===p);} }";
     html += "if(emSel){for(const o of emSel.options){o.selected=(o.value===e);} }";
+    html += "if(ctSrc){for(const o of ctSrc.options){o.selected=(o.value===cts);} }";
+    html += "if(tsIdx){tsIdx.value=tsi;}";
     html += "if(modelInput){modelInput.value=m;}if(keypadsInput){keypadsInput.value=ks;}";
     html += "let parsed=[];try{parsed=JSON.parse(btnJson);}catch(err){parsed=[];}";
     html += "btnRows.forEach((row,idx)=>{const data=parsed[idx]||{};";
@@ -1588,6 +1664,8 @@ void handleHvacsAdd() {
   h.protocol = web.arg("protocol");
   h.emitterIndex = web.arg("emitter").toInt();
   h.model = web.arg("model").toInt();
+  h.currentTempSource = "setpoint";
+  h.tempSensorIndex = 0;
   initHvacRuntimeStates();
   saveConfig();
   Serial.print("web: hvac added id=");
@@ -1629,6 +1707,12 @@ void handleHvacsUpdate() {
   h.protocol = protocol;
   h.emitterIndex = emitterIndex;
   h.model = model;
+  h.currentTempSource = web.arg("current_temp_source");
+  h.currentTempSource.toLowerCase();
+  if (h.currentTempSource != "sensor") h.currentTempSource = "setpoint";
+  uint16_t sensorIndex = web.arg("temp_sensor_index").toInt();
+  if (sensorIndex >= kMaxTempSensors) sensorIndex = 0;
+  h.tempSensorIndex = static_cast<uint8_t>(sensorIndex);
   h.isCustom = (protocol == "CUSTOM");
   String keypadCsv = web.arg("din_keypad_ids");
   if (keypadCsv.length() == 0) keypadCsv = web.arg("din_keypad_id");
@@ -1981,10 +2065,6 @@ bool processCommand(JsonDocument &doc, JsonDocument &resp, int8_t sourceTelnetSl
     nextState = hvacStates[hvacIndex];
     previous = hvacStates[hvacIndex];
   }
-  bool hasCurrentTemp = doc["current_temp"].is<float>() ||
-                        doc["current_temp"].is<double>() ||
-                        doc["current_temp"].is<int>();
-
   if (hvac->isCustom || hvac->protocol == "CUSTOM") {
     String encoding = doc["encoding"] | hvac->customEncoding;
     bool power = IRac::strToBool((const char*)(doc["power"] | "on"));
@@ -2018,9 +2098,10 @@ bool processCommand(JsonDocument &doc, JsonDocument &resp, int8_t sourceTelnetSl
     nextState.setpoint = temp;
     nextState.fan = fanStr;
     nextState.light = light;
-    if (hasCurrentTemp) {
-      nextState.currentTemp = doc["current_temp"].as<float>();
-    } else if (!previous.initialized) {
+    if (hvacUsesSensorTemp(*hvac) && hvac->tempSensorIndex < tempSensorCount &&
+        tempSensorValid[hvac->tempSensorIndex]) {
+      nextState.currentTemp = tempSensorReadings[hvac->tempSensorIndex];
+    } else {
       nextState.currentTemp = temp;
     }
 
@@ -2080,9 +2161,10 @@ bool processCommand(JsonDocument &doc, JsonDocument &resp, int8_t sourceTelnetSl
   nextState.setpoint = temp;
   nextState.fan = fanToString(fan);
   nextState.light = light;
-  if (hasCurrentTemp) {
-    nextState.currentTemp = doc["current_temp"].as<float>();
-  } else if (!previous.initialized) {
+  if (hvacUsesSensorTemp(*hvac) && hvac->tempSensorIndex < tempSensorCount &&
+      tempSensorValid[hvac->tempSensorIndex]) {
+    nextState.currentTemp = tempSensorReadings[hvac->tempSensorIndex];
+  } else {
     nextState.currentTemp = temp;
   }
 
@@ -2682,6 +2764,84 @@ void ensureWireGuardConnected() {
   setupWireGuard();
 }
 
+void setupTemperatureSensors() {
+  tempSensorCount = 0;
+  tempLastReadMs = 0;
+  for (uint8_t i = 0; i < kMaxTempSensors; i++) {
+    tempSensorReadings[i] = 0;
+    tempSensorValid[i] = false;
+  }
+  if (tempBus) {
+    delete tempBus;
+    tempBus = nullptr;
+  }
+  if (tempOneWire) {
+    delete tempOneWire;
+    tempOneWire = nullptr;
+  }
+  if (!config.tempSensors.enabled) {
+    Serial.println("temp: DS18B20 disabled");
+    return;
+  }
+
+  tempOneWire = new OneWire(config.tempSensors.gpio);
+  tempBus = new DallasTemperature(tempOneWire);
+  tempBus->begin();
+  uint8_t found = static_cast<uint8_t>(tempBus->getDeviceCount());
+  for (uint8_t i = 0; i < found && tempSensorCount < kMaxTempSensors; i++) {
+    if (!tempBus->getAddress(tempSensorAddresses[tempSensorCount], i)) continue;
+    tempBus->setResolution(tempSensorAddresses[tempSensorCount], 12);
+    tempSensorCount++;
+  }
+  Serial.print("temp: DS18B20 bus on GPIO ");
+  Serial.print(config.tempSensors.gpio);
+  Serial.print(" sensors=");
+  Serial.println(tempSensorCount);
+  readTemperatureSensors();
+  for (uint8_t i = 0; i < config.hvacCount; i++) {
+    const HvacConfig &h = config.hvacs[i];
+    if (!hvacUsesSensorTemp(h)) continue;
+    if (h.tempSensorIndex >= tempSensorCount) continue;
+    if (!tempSensorValid[h.tempSensorIndex]) continue;
+    ensureHvacStateInitialized(i);
+    hvacStates[i].currentTemp = tempSensorReadings[h.tempSensorIndex];
+  }
+}
+
+void readTemperatureSensors() {
+  if (!config.tempSensors.enabled || !tempBus) return;
+  tempBus->requestTemperatures();
+  for (uint8_t i = 0; i < tempSensorCount; i++) {
+    float t = tempBus->getTempC(tempSensorAddresses[i]);
+    bool valid = (t != DEVICE_DISCONNECTED_C) && (t > -100.0f) && (t < 150.0f);
+    tempSensorValid[i] = valid;
+    if (valid) tempSensorReadings[i] = t;
+  }
+}
+
+void handleTemperatureSensors() {
+  if (!config.tempSensors.enabled || !tempBus) return;
+  unsigned long intervalMs = static_cast<unsigned long>(config.tempSensors.readIntervalSec) * 1000UL;
+  if (intervalMs < 1000UL) intervalMs = 1000UL;
+  unsigned long now = millis();
+  if ((now - tempLastReadMs) < intervalMs) return;
+  tempLastReadMs = now;
+  readTemperatureSensors();
+  for (uint8_t i = 0; i < config.hvacCount; i++) {
+    const HvacConfig &h = config.hvacs[i];
+    if (!hvacUsesSensorTemp(h)) continue;
+    if (h.tempSensorIndex >= tempSensorCount) continue;
+    if (!tempSensorValid[h.tempSensorIndex]) continue;
+    ensureHvacStateInitialized(i);
+    HvacRuntimeState previous = hvacStates[i];
+    hvacStates[i].currentTemp = tempSensorReadings[h.tempSensorIndex];
+    if (hvacStateChanged(previous, hvacStates[i])) {
+      logHvacStateChange(h.id, hvacStates[i], -1);
+      broadcastStateToTelnetClients(h.id, hvacStates[i], -1);
+    }
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   delay(200);
@@ -2694,6 +2854,7 @@ void setup() {
     Serial.println("fs: SPIFFS mounted");
   }
   loadConfig();
+  setupTemperatureSensors();
   rebuildEmitters();
   startWifi();
   setupWireGuard();
@@ -2720,6 +2881,7 @@ void loop() {
   web.handleClient();
   handleTelnet();
   handleDinplug();
+  handleTemperatureSensors();
   ensureWireGuardConnected();
   dnsServer.processNextRequest();
   ArduinoOTA.handle();
