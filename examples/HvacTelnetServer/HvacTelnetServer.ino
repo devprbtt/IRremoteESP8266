@@ -3,6 +3,7 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <ETH.h>
 #include <WebServer.h>
 #include <DNSServer.h>
 #include <ESPmDNS.h>
@@ -22,6 +23,7 @@ extern "C" {
 
 #include <IRremoteESP8266.h>
 #include <IRac.h>
+#include <IRrecv.h>
 #include <IRsend.h>
 #include <IRutils.h>
 
@@ -38,6 +40,9 @@ static const unsigned long kDinplugKeepAliveIntervalMs = 10000;
 static const uint8_t kMaxDinplugButtons = 8;
 static const uint8_t kMaxDinplugKeypads = 8;
 static const uint8_t kMaxTempSensors = 8;
+static const uint16_t kIrRecvCaptureBufferSize = 1024;
+static const uint8_t kIrRecvTimeoutMs = 50;
+static const uint32_t kProntoDefaultFrequency = 38000;
 
 static const char *kConfigPath = "/config.json";
 static const char *kApSsid = "IR-HVAC-Setup";
@@ -111,12 +116,24 @@ struct TempSensorConfig {
   uint16_t readIntervalSec = 10;
 };
 
+struct EthernetConfig {
+  bool enabled = false;
+};
+
+struct IrReceiverConfig {
+  bool enabled = false;
+  uint8_t gpio = 14;
+  String mode = "auto";  // auto | pronto | rawhex
+};
+
 struct Config {
   WifiConfig wifi;
   WebConfig web;
   WireGuardConfig wg;
   DinplugConfig dinplug;
   TempSensorConfig tempSensors;
+  EthernetConfig eth;
+  IrReceiverConfig irReceiver;
   String hostname;
   uint16_t telnetPort = kDefaultTelnetPort;
   uint16_t emitterGpios[kMaxEmitters];
@@ -171,10 +188,19 @@ DeviceAddress tempSensorAddresses[kMaxTempSensors];
 float tempSensorReadings[kMaxTempSensors];
 bool tempSensorValid[kMaxTempSensors];
 unsigned long tempLastReadMs = 0;
+IRrecv *irReceiver = nullptr;
+decode_results irReceiverCapture;
+bool ethernetUp = false;
 
 static const uint16_t kDefaultWireGuardPort = 51820;
 static const unsigned long kWireGuardRetryIntervalMs = 30000;
 String wgInterfacePublicKey = "";
+
+// WT32-ETH01 defaults (LAN8720 PHY)
+static const uint8_t kEthPhyAddr = 1;
+static const int8_t kEthPowerPin = 16;
+static const uint8_t kEthMdcPin = 23;
+static const uint8_t kEthMdioPin = 18;
 
 void initHvacRuntimeStates();
 bool processCommand(JsonDocument &doc, JsonDocument &resp, int8_t sourceTelnetSlot = -1);
@@ -210,6 +236,16 @@ void setupTemperatureSensors();
 void readTemperatureSensors();
 void handleTemperatureSensors();
 bool hvacUsesSensorTemp(const HvacConfig &h);
+void setupIrReceiver();
+void handleIrReceiver();
+String normalizeIrReceiverMode(const String &modeIn);
+String buildProntoFromCapture(const decode_results &capture, uint32_t frequency);
+String buildRawHexFromCapture(const decode_results &capture);
+String truncateForLog(const String &line, size_t maxLen = 900);
+bool startEthernet();
+bool networkReady();
+String networkModeString();
+IPAddress networkLocalIp();
 
 // ---- Helpers ----
 
@@ -513,6 +549,82 @@ bool parseStringAndSendRacepoint(IRsend *irsend, const String str) {
 #endif
 }
 
+String normalizeIrReceiverMode(const String &modeIn) {
+  String mode = modeIn;
+  mode.toLowerCase();
+  mode.trim();
+  if (mode == "pronto") return "pronto";
+  if (mode == "rawhex" || mode == "raw_hex" || mode == "raw") return "rawhex";
+  return "auto";
+}
+
+String truncateForLog(const String &line, size_t maxLen) {
+  if (line.length() <= maxLen) return line;
+  return line.substring(0, maxLen) + "...(truncated)";
+}
+
+String buildRawHexFromCapture(const decode_results &capture) {
+  uint16_t pulseCount = getCorrectedRawLength(&capture);
+  uint16_t *raw = resultToRawArray(&capture);
+  if (!raw || pulseCount == 0) {
+    if (raw) delete[] raw;
+    return "";
+  }
+  String out;
+  out.reserve(static_cast<size_t>(pulseCount) * 5 + 16);
+  char hex[6] = {0};
+  for (uint16_t i = 0; i < pulseCount; i++) {
+    snprintf(hex, sizeof(hex), "%04X", raw[i] & 0xFFFF);
+    out += hex;
+    if (i + 1 < pulseCount) out += ' ';
+  }
+  delete[] raw;
+  return out;
+}
+
+String buildProntoFromCapture(const decode_results &capture, uint32_t frequency) {
+  if (frequency == 0) frequency = kProntoDefaultFrequency;
+  uint16_t pulseCount = getCorrectedRawLength(&capture);
+  uint16_t *raw = resultToRawArray(&capture);
+  if (!raw || pulseCount < 2) {
+    if (raw) delete[] raw;
+    return "";
+  }
+
+  if (pulseCount & 1) pulseCount--;  // Pronto sequence must have mark/space pairs.
+  if (pulseCount < 2) {
+    delete[] raw;
+    return "";
+  }
+
+  uint16_t freqWord = static_cast<uint16_t>((1000000.0 / (frequency * 0.241246)) + 0.5);
+  if (freqWord == 0) freqWord = 1;
+  uint16_t burstPairs = pulseCount / 2;
+
+  String out;
+  out.reserve(static_cast<size_t>(pulseCount + 4) * 5);
+  char hex[6] = {0};
+  auto appendWord = [&out, &hex](uint16_t word) {
+    snprintf(hex, sizeof(hex), "%04X", word & 0xFFFF);
+    if (out.length()) out += ' ';
+    out += hex;
+  };
+
+  appendWord(0x0000);
+  appendWord(freqWord);
+  appendWord(burstPairs);
+  appendWord(0x0000);
+  for (uint16_t i = 0; i < pulseCount; i++) {
+    uint32_t cycles = static_cast<uint32_t>((static_cast<double>(raw[i]) * frequency / 1000000.0) + 0.5);
+    if (cycles == 0) cycles = 1;
+    if (cycles > 0xFFFF) cycles = 0xFFFF;
+    appendWord(static_cast<uint16_t>(cycles));
+  }
+
+  delete[] raw;
+  return out;
+}
+
 String configToJsonString() {
   JsonDocument doc;
   JsonObject wifi = doc["wifi"].to<JsonObject>();
@@ -548,6 +660,14 @@ String configToJsonString() {
   ts["enabled"] = config.tempSensors.enabled;
   ts["gpio"] = config.tempSensors.gpio;
   ts["read_interval_sec"] = config.tempSensors.readIntervalSec;
+
+  JsonObject eth = doc["ethernet"].to<JsonObject>();
+  eth["enabled"] = config.eth.enabled;
+
+  JsonObject irrx = doc["ir_receiver"].to<JsonObject>();
+  irrx["enabled"] = config.irReceiver.enabled;
+  irrx["gpio"] = config.irReceiver.gpio;
+  irrx["mode"] = normalizeIrReceiverMode(config.irReceiver.mode);
 
   doc["hostname"] = config.hostname.length() ? config.hostname : kDefaultHostname;
   doc["telnet_port"] = config.telnetPort;
@@ -634,6 +754,10 @@ void clearConfig() {
   config.tempSensors.enabled = false;
   config.tempSensors.gpio = 4;
   config.tempSensors.readIntervalSec = 10;
+  config.eth.enabled = false;
+  config.irReceiver.enabled = false;
+  config.irReceiver.gpio = 14;
+  config.irReceiver.mode = "auto";
   config.hostname = kDefaultHostname;
   config.telnetPort = kDefaultTelnetPort;
   for (uint8_t i = 0; i < kMaxEmitters; i++) {
@@ -724,6 +848,16 @@ void loadConfig() {
     config.tempSensors.gpio = ts["gpio"] | 4;
     config.tempSensors.readIntervalSec = ts["read_interval_sec"] | 10;
     if (config.tempSensors.readIntervalSec == 0) config.tempSensors.readIntervalSec = 10;
+  }
+  JsonObject eth = doc["ethernet"];
+  if (!eth.isNull()) {
+    config.eth.enabled = eth["enabled"] | false;
+  }
+  JsonObject irrx = doc["ir_receiver"];
+  if (!irrx.isNull()) {
+    config.irReceiver.enabled = irrx["enabled"] | false;
+    config.irReceiver.gpio = irrx["gpio"] | 14;
+    config.irReceiver.mode = normalizeIrReceiverMode(irrx["mode"] | "auto");
   }
   bool generatedWgKey = ensureWireGuardKeypair(false);
   if (generatedWgKey) saveConfig();
@@ -1258,8 +1392,8 @@ void handleHome() {
   String html = pageHeader("IR HVAC Telnet");
   html += "<div class='card'><h2>IR HVAC Telnet Server</h2>";
   html += "<p>Telnet port: <strong>" + String(config.telnetPort) + "</strong></p>";
-  html += "<p>WiFi mode: <strong>" + String(WiFi.isConnected() ? "STA" : "AP") + "</strong></p>";
-  html += "<p>IP: <strong>" + WiFi.localIP().toString() + "</strong></p>";
+  html += "<p>Network mode: <strong>" + networkModeString() + "</strong></p>";
+  html += "<p>IP: <strong>" + networkLocalIp().toString() + "</strong></p>";
   html += "<p>Hostname: <strong>" + htmlEscape(config.hostname.length() ? config.hostname : kDefaultHostname) + ".local</strong></p>";
   html += "<p>WireGuard: <strong>" + String(config.wg.enabled ? (wgConnected ? "connected" : "enabled (not connected)") : "disabled") + "</strong></p>";
   if (config.wg.enabled && config.wg.localIp != IPAddress()) {
@@ -1267,6 +1401,11 @@ void handleHome() {
   }
   html += "<p>DINplug: <strong>" + htmlEscape(dinplugConnectionStatus()) + "</strong></p>";
   html += "<p>Emitters: <strong>" + String(config.emitterCount) + "</strong></p>";
+  html += "<p>IR receiver: <strong>" + String(config.irReceiver.enabled ? "enabled" : "disabled") + "</strong></p>";
+  if (config.irReceiver.enabled) {
+    html += "<p>IR RX GPIO/mode: <strong>" + String(config.irReceiver.gpio) + " / " +
+            htmlEscape(normalizeIrReceiverMode(config.irReceiver.mode)) + "</strong></p>";
+  }
   html += "<p>HVACs: <strong>" + String(config.hvacCount) + "</strong></p></div>";
   html += pageFooter();
   web.send(200, "text/html", html);
@@ -1323,6 +1462,22 @@ void handleConfigPage() {
   html += "<label>Read interval (seconds)</label>";
   html += "<input name='ts_interval' type='number' min='1' max='3600' value='" + String(config.tempSensors.readIntervalSec) + "'>";
   html += "<p>Detected sensors at runtime: <strong>" + String(tempSensorCount) + "</strong></p>";
+  html += "<h3>Ethernet (WT32 LAN8720)</h3>";
+  html += "<div class='row'><input type='checkbox' id='ethEnabled' name='eth_enabled'" +
+          String(config.eth.enabled ? " checked" : "") + "><label for='ethEnabled'>Enable Ethernet</label></div>";
+  html += "<p>When enabled, firmware tries Ethernet first, then falls back to WiFi/AP if link fails.</p>";
+  html += "<h3>IR Receiver Log Input</h3>";
+  html += "<div class='row'><input type='checkbox' id='irrxEnabled' name='irrx_enabled'" +
+          String(config.irReceiver.enabled ? " checked" : "") + "><label for='irrxEnabled'>Enable IR receiver</label></div>";
+  html += "<label>IR receiver GPIO</label>";
+  html += "<input name='irrx_gpio' type='number' min='0' max='39' value='" + String(config.irReceiver.gpio) + "'>";
+  String irMode = normalizeIrReceiverMode(config.irReceiver.mode);
+  html += "<label>IR log mode</label>";
+  html += "<select name='irrx_mode'>";
+  html += "<option value='auto'" + String(irMode == "auto" ? " selected" : "") + ">auto (decode protocol/code)</option>";
+  html += "<option value='pronto'" + String(irMode == "pronto" ? " selected" : "") + ">pronto</option>";
+  html += "<option value='rawhex'" + String(irMode == "rawhex" ? " selected" : "") + ">raw hex</option>";
+  html += "</select>";
   html += "<button type='submit'>Save & Reboot</button>";
   html += "</form></div>";
   html += "<script>";
@@ -1370,6 +1525,12 @@ void handleConfigSave() {
   uint16_t tsInterval = web.arg("ts_interval").toInt();
   if (tsInterval == 0) tsInterval = 10;
   config.tempSensors.readIntervalSec = tsInterval;
+  config.eth.enabled = web.hasArg("eth_enabled");
+  config.irReceiver.enabled = web.hasArg("irrx_enabled");
+  int irrxGpio = web.arg("irrx_gpio").toInt();
+  if (irrxGpio < 0 || irrxGpio > 39) irrxGpio = 14;
+  config.irReceiver.gpio = static_cast<uint8_t>(irrxGpio);
+  config.irReceiver.mode = normalizeIrReceiverMode(web.arg("irrx_mode"));
   ensureWireGuardKeypair(true);
   String hostname = web.arg("hostname");
   hostname.trim();
@@ -1380,8 +1541,34 @@ void handleConfigSave() {
   config.telnetPort = port;
   saveConfig();
   Serial.println("web: config saved, rebooting");
-  web.send(200, "text/html", "<html><body><p>Saved. Rebooting...</p></body></html>");
-  delay(500);
+
+  String mdnsUrl = "http://" + htmlEscape(config.hostname.length() ? config.hostname : kDefaultHostname) + ".local/";
+  String staticIpUrl = "";
+  if (!config.eth.enabled && config.wifi.ssid.length() > 0 && !config.wifi.dhcp && config.wifi.ip != IPAddress()) {
+    staticIpUrl = "http://" + config.wifi.ip.toString() + "/";
+  }
+  String rebootHtml = "<!doctype html><html><head><meta charset='utf-8'><title>Rebooting</title>";
+  rebootHtml += "<meta name='viewport' content='width=device-width,initial-scale=1'>";
+  rebootHtml += "<style>body{font-family:Arial,sans-serif;padding:24px;max-width:720px;margin:auto;}code{background:#f1f5f9;padding:2px 6px;border-radius:6px;}a{word-break:break-all;}</style>";
+  rebootHtml += "</head><body><h2>Saved. Rebooting device...</h2>";
+  rebootHtml += "<p>This page will try to reconnect automatically.</p>";
+  rebootHtml += "<p>Fallback links:</p><ul>";
+  rebootHtml += "<li><a href='" + mdnsUrl + "'>" + mdnsUrl + "</a></li>";
+  if (staticIpUrl.length()) rebootHtml += "<li><a href='" + staticIpUrl + "'>" + staticIpUrl + "</a></li>";
+  rebootHtml += "<li><a href='http://192.168.4.1/'>http://192.168.4.1/</a></li></ul>";
+  rebootHtml += "<script>";
+  rebootHtml += "const targets=[];";
+  rebootHtml += "if(location&&location.origin) targets.push(location.origin+'/');";
+  rebootHtml += "targets.push('" + mdnsUrl + "');";
+  if (staticIpUrl.length()) rebootHtml += "targets.push('" + staticIpUrl + "');";
+  rebootHtml += "targets.push('http://192.168.4.1/');";
+  rebootHtml += "let i=0;const tryNext=()=>{if(!targets.length)return;location.href=targets[i%targets.length];i++;setTimeout(tryNext,3500);};";
+  rebootHtml += "setTimeout(tryNext,2200);";
+  rebootHtml += "</script></body></html>";
+  web.sendHeader("Cache-Control", "no-store");
+  web.sendHeader("Connection", "close");
+  web.send(200, "text/html", rebootHtml);
+  delay(1200);
   ESP.restart();
 }
 
@@ -2228,26 +2415,48 @@ void handleMonitorPage() {
   html += "<div class='card'><h2>Telnet Monitor</h2>";
   html += "<p>Status: <strong id='monState'>-</strong></p>";
   html += "<div class='row'><button type='button' id='toggleBtn'>Toggle Monitor</button>";
+  html += "<button type='button' id='copyLastIrBtn'>Copy Last IR Code</button>";
+  html += "<button type='button' id='copyAllIrBtn'>Copy All IR Codes</button>";
   html += "<button type='button' class='secondary' id='clearBtn'>Clear Log</button></div>";
-  html += "<p>Showing latest " + String(kMonitorLogCapacity) + " lines (RX/TX).</p>";
+  html += "<p id='copyStatus'></p>";
+  html += "<p>Showing latest " + String(kMonitorLogCapacity) + " lines (RX/TX, DINplug, ir-rx).</p>";
   html += "<pre id='logBox'>Loading...</pre></div>";
   html += "<script>";
   html += "const monState=document.getElementById('monState');";
   html += "const logBox=document.getElementById('logBox');";
   html += "const toggleBtn=document.getElementById('toggleBtn');";
+  html += "const copyLastIrBtn=document.getElementById('copyLastIrBtn');";
+  html += "const copyAllIrBtn=document.getElementById('copyAllIrBtn');";
   html += "const clearBtn=document.getElementById('clearBtn');";
+  html += "const copyStatus=document.getElementById('copyStatus');";
   html += "let enabled=false;";
+  html += "let lines=[];";
+  html += "const setStatus=(msg)=>{copyStatus.textContent=msg;};";
+  html += "const copyText=async(text)=>{";
+  html += "if(!text||!text.length){setStatus('No IR code available to copy.');return false;}";
+  html += "try{if(navigator.clipboard&&navigator.clipboard.writeText){await navigator.clipboard.writeText(text);setStatus('Copied to clipboard.');return true;}}catch(e){}";
+  html += "const ta=document.createElement('textarea');ta.value=text;document.body.appendChild(ta);ta.select();";
+  html += "let ok=false;try{ok=document.execCommand('copy');}catch(e){}document.body.removeChild(ta);";
+  html += "setStatus(ok?'Copied to clipboard.':'Clipboard copy failed.');return ok;};";
+  html += "const extractIrCodes=(arr)=>arr.filter(l=>l.includes('ir-rx ')).map(l=>l.substring(l.indexOf('ir-rx ')+6));";
   html += "const load=async()=>{";
   html += "try{const r=await fetch('/api/monitor');const d=await r.json();";
   html += "enabled=!!d.enabled;monState.textContent=enabled?'on':'off';";
-  html += "logBox.textContent=(d.lines||[]).join('\\n');";
+  html += "lines=(d.lines||[]);";
+  html += "logBox.textContent=lines.join('\\n');";
   html += "logBox.scrollTop=logBox.scrollHeight;";
   html += "}catch(e){logBox.textContent='Monitor API error';}};";
   html += "toggleBtn.addEventListener('click',async()=>{";
   html += "const body=new URLSearchParams({enabled:enabled?'0':'1'});";
   html += "await fetch('/monitor/toggle',{method:'POST',body});await load();});";
+  html += "copyLastIrBtn.addEventListener('click',async()=>{";
+  html += "const codes=extractIrCodes(lines);if(!codes.length){setStatus('No captured IR codes in current log window.');return;}";
+  html += "await copyText(codes[codes.length-1]);});";
+  html += "copyAllIrBtn.addEventListener('click',async()=>{";
+  html += "const codes=extractIrCodes(lines);if(!codes.length){setStatus('No captured IR codes in current log window.');return;}";
+  html += "await copyText(codes.join('\\n'));});";
   html += "clearBtn.addEventListener('click',async()=>{";
-  html += "await fetch('/monitor/clear',{method:'POST'});await load();});";
+  html += "await fetch('/monitor/clear',{method:'POST'});setStatus('');await load();});";
   html += "load();setInterval(load,1000);";
   html += "</script>";
   html += pageFooter();
@@ -2292,10 +2501,38 @@ void handleMonitorToggle() {
   web.send(200, "application/json", out);
 }
 
-// Captive-portal probes (Android/iOS/Windows) create noisy 404 logs; respond quietly.
-void handleCaptive204() { web.send(204); }
+bool isApPortalMode() {
+  wifi_mode_t mode = WiFi.getMode();
+  return (mode == WIFI_MODE_AP || mode == WIFI_MODE_APSTA);
+}
+
+String captivePortalUrl() {
+  IPAddress apIp = WiFi.softAPIP();
+  if (apIp == IPAddress()) apIp = IPAddress(192, 168, 4, 1);
+  return "http://" + apIp.toString() + "/";
+}
+
+void sendPortalRedirect() {
+  String url = captivePortalUrl();
+  web.sendHeader("Cache-Control", "no-store");
+  web.sendHeader("Location", url, true);
+  web.send(302, "text/html", "<html><body><a href='" + url + "'>Redirecting...</a></body></html>");
+}
+
+void handleCaptive204() {
+  if (isApPortalMode()) {
+    sendPortalRedirect();
+    return;
+  }
+  web.send(204);
+}
+
 void handleCaptiveRedirect() {
-  web.sendHeader("Location", "/");
+  if (isApPortalMode()) {
+    sendPortalRedirect();
+    return;
+  }
+  web.sendHeader("Location", "/", true);
   web.send(302, "text/plain", "");
 }
 
@@ -2325,6 +2562,9 @@ void setupWeb() {
   web.on("/generate_204", HTTP_ANY, handleCaptive204);
   web.on("/gen_204", HTTP_ANY, handleCaptive204);
   web.on("/hotspot-detect.html", HTTP_ANY, handleCaptiveRedirect);
+  web.on("/success.txt", HTTP_ANY, handleCaptiveRedirect);
+  web.on("/canonical.html", HTTP_ANY, handleCaptiveRedirect);
+  web.on("/redirect", HTTP_ANY, handleCaptiveRedirect);
   web.on("/fwlink", HTTP_ANY, handleCaptiveRedirect);
   web.on("/connecttest.txt", HTTP_ANY, handleCaptiveRedirect);
   web.on("/ncsi.txt", HTTP_ANY, handleCaptiveRedirect);
@@ -2338,7 +2578,11 @@ void setupWeb() {
   web.on("/api/config", HTTP_GET, handleApiConfig);
   web.on("/api/wifi/scan", HTTP_GET, handleWifiScan);
   web.onNotFound([]() {
-    web.sendHeader("Location", "/");
+    if (isApPortalMode()) {
+      sendPortalRedirect();
+      return;
+    }
+    web.sendHeader("Location", "/", true);
     web.send(302, "text/plain", "");
   });
   web.begin();
@@ -2391,7 +2635,7 @@ void ensureDinplugConnected(bool forceNow) {
   dinplugLastAttemptMs = now;
   dinplugClient.stop();
   dinplugConnected = false;
-  if (!WiFi.isConnected()) return;
+  if (!networkReady()) return;
   Serial.print("dinplug: connecting to ");
   Serial.println(gatewayHost);
   if (dinplugClient.connect(gatewayHost.c_str(), kDinplugPort)) {
@@ -2612,7 +2856,63 @@ void startMdns() {
 #endif
 }
 
+bool startEthernet() {
+  ethernetUp = false;
+  if (!config.eth.enabled) return false;
+  const char *host = (config.hostname.length() ? config.hostname.c_str() : kDefaultHostname);
+  ETH.setHostname(host);
+  Serial.println("eth: starting LAN8720 (WT32 defaults)");
+  bool started = ETH.begin(kEthPhyAddr, kEthPowerPin, kEthMdcPin, kEthMdioPin,
+                           ETH_PHY_LAN8720, ETH_CLOCK_GPIO0_IN);
+  if (!started) {
+    Serial.println("eth: begin failed");
+    return false;
+  }
+
+  unsigned long start = millis();
+  while (millis() - start < 12000) {
+    if (ETH.linkUp() && ETH.localIP() != IPAddress()) {
+      ethernetUp = true;
+      break;
+    }
+    delay(100);
+  }
+  if (!ethernetUp) {
+    Serial.println("eth: no link/IP");
+    return false;
+  }
+  Serial.print("eth: connected IP=");
+  Serial.println(ETH.localIP());
+  return true;
+}
+
+bool networkReady() {
+  if (ethernetUp && ETH.linkUp() && ETH.localIP() != IPAddress()) return true;
+  if (WiFi.status() == WL_CONNECTED) return true;
+  return false;
+}
+
+IPAddress networkLocalIp() {
+  if (ethernetUp && ETH.linkUp() && ETH.localIP() != IPAddress()) return ETH.localIP();
+  if (WiFi.status() == WL_CONNECTED) return WiFi.localIP();
+  if (WiFi.getMode() == WIFI_MODE_AP || WiFi.getMode() == WIFI_MODE_APSTA) return WiFi.softAPIP();
+  return IPAddress();
+}
+
+String networkModeString() {
+  if (ethernetUp && ETH.linkUp() && ETH.localIP() != IPAddress()) return "ETH";
+  if (WiFi.status() == WL_CONNECTED) return "WiFi STA";
+  if (WiFi.getMode() == WIFI_MODE_AP || WiFi.getMode() == WIFI_MODE_APSTA) return "WiFi AP";
+  return "offline";
+}
+
 void startWifi() {
+  if (startEthernet()) {
+    dnsServer.stop();
+    startMdns();
+    return;
+  }
+
   if (config.wifi.ssid.length() == 0) {
     WiFi.mode(WIFI_AP);
     WiFi.softAP(kApSsid);
@@ -2714,7 +3014,7 @@ void setupWireGuard() {
     }
     return;
   }
-  if (WiFi.status() != WL_CONNECTED) return;
+  if (!networkReady()) return;
   if (config.wg.localIp == IPAddress() || config.wg.privateKey.length() == 0 ||
       config.wg.peerPublicKey.length() == 0 || config.wg.endpointHost.length() == 0) {
     Serial.println("wireguard: config incomplete; skipping");
@@ -2758,6 +3058,7 @@ void setupWireGuard() {
 void ensureWireGuardConnected() {
   if (!config.wg.enabled) return;
   if (wgConnected && wgClient.is_initialized()) return;
+  if (!networkReady()) return;
   unsigned long now = millis();
   if ((now - wgLastAttemptMs) < kWireGuardRetryIntervalMs) return;
   wgLastAttemptMs = now;
@@ -2842,6 +3143,52 @@ void handleTemperatureSensors() {
   }
 }
 
+void setupIrReceiver() {
+  if (irReceiver) {
+    irReceiver->disableIRIn();
+    delete irReceiver;
+    irReceiver = nullptr;
+  }
+  config.irReceiver.mode = normalizeIrReceiverMode(config.irReceiver.mode);
+  if (!config.irReceiver.enabled) {
+    Serial.println("ir-rx: disabled");
+    return;
+  }
+  irReceiver = new IRrecv(config.irReceiver.gpio, kIrRecvCaptureBufferSize, kIrRecvTimeoutMs, true);
+  irReceiver->enableIRIn();
+  Serial.print("ir-rx: enabled gpio=");
+  Serial.print(config.irReceiver.gpio);
+  Serial.print(" mode=");
+  Serial.println(config.irReceiver.mode);
+}
+
+void handleIrReceiver() {
+  if (!irReceiver) return;
+  if (!irReceiver->decode(&irReceiverCapture)) return;
+
+  String mode = normalizeIrReceiverMode(config.irReceiver.mode);
+  String line;
+  if (mode == "pronto") {
+    String pronto = buildProntoFromCapture(irReceiverCapture, kProntoDefaultFrequency);
+    line = "ir-rx pronto gpio=" + String(config.irReceiver.gpio) + " freq=" +
+           String(kProntoDefaultFrequency) + " code=" + pronto;
+  } else if (mode == "rawhex") {
+    String rawhex = buildRawHexFromCapture(irReceiverCapture);
+    line = "ir-rx rawhex gpio=" + String(config.irReceiver.gpio) + " code=" + rawhex;
+  } else {
+    String basic = resultToHumanReadableBasic(&irReceiverCapture);
+    basic.replace('\n', ' ');
+    line = "ir-rx auto gpio=" + String(config.irReceiver.gpio) + " " + basic;
+  }
+
+  if (irReceiverCapture.overflow) line += " overflow=1";
+  line = truncateForLog(line);
+  Serial.println(line);
+  if (telnetMonitorEnabled) addMonitorLogEntry(line);
+
+  irReceiver->resume();
+}
+
 void setup() {
   Serial.begin(115200);
   delay(200);
@@ -2855,6 +3202,7 @@ void setup() {
   }
   loadConfig();
   setupTemperatureSensors();
+  setupIrReceiver();
   rebuildEmitters();
   startWifi();
   setupWireGuard();
@@ -2882,6 +3230,7 @@ void loop() {
   handleTelnet();
   handleDinplug();
   handleTemperatureSensors();
+  handleIrReceiver();
   ensureWireGuardConnected();
   dnsServer.processNextRequest();
   ArduinoOTA.handle();

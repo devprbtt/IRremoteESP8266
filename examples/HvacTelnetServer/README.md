@@ -15,6 +15,8 @@ This example provides:
 
 ## Web UI capabilities
 - **Config** (`/config`): WiFi, hostname, telnet port, optional web password, WireGuard, and DS18B20 bus settings.
+- **Config** (`/config`): WiFi, hostname, telnet port, optional web password, WireGuard, DS18B20 bus, and IR receiver log settings.
+- **Config** (`/config`): WiFi, hostname, telnet port, optional web password, WireGuard, DS18B20 bus, IR receiver log settings, and Ethernet (WT32 LAN8720).
 - **Emitters** (`/emitters`): add/remove IR LED GPIOs.
 - **HVACs** (`/hvacs`): register and edit HVAC entries (protocol, emitter, model), current temperature source policy, DINplug keypads, and keypad button actions.
 - **Test HVAC** (`/hvacs/test`): send a JSON command from the browser, including `light`.
@@ -94,6 +96,31 @@ At runtime:
 - The firmware discovers sensors on boot and stores them by index (`0..N-1`).
 - HVAC entries can select `Current Temp Source` (`setpoint` or `sensor`) and `DS18B20 Sensor Index`.
 - Sensor-driven temperature updates are periodically reflected in HVAC state and broadcast to telnet clients.
+
+## Ethernet (WT32-ETH01)
+Configure Ethernet in **Config** (`/config`):
+- Enable/disable Ethernet (`LAN8720`).
+
+When enabled, firmware tries Ethernet first. If no link/IP is obtained, it falls back to WiFi STA or setup AP logic.
+
+WT32 defaults used by firmware:
+- PHY: `LAN8720`
+- PHY address: `1`
+- Power pin: `GPIO16`
+- MDC: `GPIO23`
+- MDIO: `GPIO18`
+- Clock mode: `ETH_CLOCK_GPIO0_IN`
+
+## IR receiver log input
+Configure IR receiver in **Config** (`/config`):
+- Enable/disable IR receiver.
+- IR receiver GPIO pin.
+- Log mode:
+  - `auto`: tries protocol decode and logs protocol/code summary.
+  - `pronto`: logs the received signal converted to Pronto hex (38 kHz base).
+  - `rawhex`: logs raw timing words as hexadecimal.
+
+At runtime, received IR messages are printed to serial and added to the Monitor log (`/monitor`) when monitor logging is enabled.
 
 ## DINplug integration
 - Gateway supports `IP` or DNS hostname (e.g. DynDNS): set in `/dinplug`.
