@@ -62,10 +62,13 @@
         <custom_component_actions>
             <action name="SendIR">
                 <action_argument name="IRCode" note="Racepoint hex code"/>
+                <action_argument name="Emitter" note="Emitter index (0-based)"/>
                 <command_interface interface="ip">
                     <command response_required="no" partial_response="no">
-                        <command_string type="character">{"cmd":"raw","emitter":1,"encoding":"racepoint","code":"</command_string>
+                        <command_string type="character">{"cmd":"raw","emitter":</command_string>
                         <parameter_list>
+                            <parameter parameter_data_type="character" action_argument="Emitter"/>
+                            <parameter parameter_data_type="character">,"encoding":"racepoint","code":"</parameter>
                             <parameter parameter_data_type="character" action_argument="IRCode"/>
                             <parameter parameter_data_type="character">"}</parameter>
                         </parameter_list>

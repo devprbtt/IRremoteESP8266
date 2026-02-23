@@ -1995,6 +1995,28 @@ void handleHvacsPage() {
     html += "<button type='button' class='secondary' id='addCmdRowBtn'>Add Command</button>";
     html += "</div>";
     html += "<button type='submit'>Add</button></form>";
+
+    bool hasCustomSource = false;
+    for (uint8_t i = 0; i < config.hvacCount; i++) {
+      if (config.hvacs[i].protocol == "CUSTOM" || config.hvacs[i].isCustom) {
+        hasCustomSource = true;
+        break;
+      }
+    }
+    if (hasCustomSource && config.hvacCount < kMaxHvacs) {
+      html += "<h3>Clone Custom HVAC</h3>";
+      html += "<form method='POST' action='/hvacs/clone'>";
+      html += "<label>Source Custom HVAC</label><select name='source_index'>";
+      for (uint8_t i = 0; i < config.hvacCount; i++) {
+        const HvacConfig &src = config.hvacs[i];
+        if (src.protocol != "CUSTOM" && !src.isCustom) continue;
+        html += "<option value='" + String(i) + "'>" + htmlEscape(src.id) + " (emitter " +
+                String(src.emitterIndex) + ", commands " + String(src.customCommandCount) + ")</option>";
+      }
+      html += "</select>";
+      html += "<label>Target Emitter</label><select name='emitter'>" + emitterOptionsHtml(0) + "</select>";
+      html += "<button type='submit' class='secondary'>Clone</button></form>";
+    }
   }
   if (config.hvacCount > 0 && config.emitterCount > 0) {
     html += "<h3>Edit HVAC</h3>";
@@ -2133,6 +2155,18 @@ void handleHvacsPage() {
     html += "if(addProtocol&&addCustomFields){addProtocol.addEventListener('change',()=>{if(addProtocol.value!=='CUSTOM'){addCcRows.forEach((r,i)=>clearCcRow(r,i>0));}});}";
     html += "if(hvacSel){hvacSel.addEventListener('change',sync);sync();}";
     html += "</script>";
+  } else if (config.emitterCount > 0) {
+    html += "<script>";
+    html += "const addProtocol=document.getElementById('addProtocol');";
+    html += "const addCustomFields=document.getElementById('addCustomFields');";
+    html += "const addCmdRowBtn=document.getElementById('addCmdRowBtn');";
+    html += "const addCcRows=[...document.querySelectorAll('[data-add-cc-row]')];";
+    html += "if(addProtocol&&addCustomFields){const upd=()=>{addCustomFields.style.display=(addProtocol.value==='CUSTOM')?'block':'none';};addProtocol.addEventListener('change',upd);upd();}";
+    html += "const clearCcRow=(row,hide)=>{if(!row)return;const n=row.querySelector('input[name$=\"_name\"]');const e=row.querySelector('select[name$=\"_encoding\"]');const c=row.querySelector('textarea[name$=\"_code\"]');if(n)n.value='';if(e)e.value='pronto';if(c)c.value='';if(hide)row.style.display='none';};";
+    html += "document.querySelectorAll('.add-cc-clear-btn').forEach(btn=>{btn.addEventListener('click',()=>{const row=btn.closest('tr');if(!row)return;const idx=Number(row.dataset.addCcRow||'0');clearCcRow(row,idx>0);});});";
+    html += "if(addCmdRowBtn){addCmdRowBtn.addEventListener('click',()=>{const next=addCcRows.find(r=>r.style.display==='none');if(next){next.style.display='';}else{alert('Maximum commands reached.');}});}";
+    html += "if(addProtocol&&addCustomFields){addProtocol.addEventListener('change',()=>{if(addProtocol.value!=='CUSTOM'){addCcRows.forEach((r,i)=>clearCcRow(r,i>0));}});}";
+    html += "</script>";
   }
   html += "</div>";
 
@@ -2177,6 +2211,59 @@ void handleHvacsAdd() {
   initHvacRuntimeStates();
   saveConfig();
   Serial.print("web: hvac added id=");
+  Serial.println(id);
+  web.sendHeader("Location", "/hvacs");
+  web.send(302, "text/plain", "");
+}
+
+void handleHvacsClone() {
+  if (!checkAuth()) { requestAuth(); return; }
+  if (config.emitterCount == 0) {
+    web.send(400, "text/plain", "Add an emitter first");
+    return;
+  }
+  if (config.hvacCount >= kMaxHvacs) {
+    web.send(400, "text/plain", "Too many HVACs");
+    return;
+  }
+  int srcIdx = web.arg("source_index").toInt();
+  if (srcIdx < 0 || srcIdx >= config.hvacCount) {
+    web.send(400, "text/plain", "Invalid source HVAC");
+    return;
+  }
+  HvacConfig &src = config.hvacs[srcIdx];
+  if (src.protocol != "CUSTOM" && !src.isCustom) {
+    web.send(400, "text/plain", "Source HVAC is not custom");
+    return;
+  }
+  int emitterIndex = web.arg("emitter").toInt();
+  if (emitterIndex < 0 || emitterIndex >= config.emitterCount) {
+    web.send(400, "text/plain", "Invalid emitter");
+    return;
+  }
+  String id = nextHvacId();
+  if (!id.length()) {
+    web.send(400, "text/plain", "No IDs left (1-99)");
+    return;
+  }
+
+  HvacConfig &dst = config.hvacs[config.hvacCount++];
+  dst = src;
+  dst.id = id;
+  dst.protocol = "CUSTOM";
+  dst.isCustom = true;
+  dst.emitterIndex = emitterIndex;
+  dst.model = -1;
+  dst.currentTempSource = "setpoint";
+  dst.tempSensorIndex = 0;
+  dst.dinKeypadCount = 0;
+  dst.dinButtonCount = 0;
+
+  initHvacRuntimeStates();
+  saveConfig();
+  Serial.print("web: hvac cloned from index ");
+  Serial.print(srcIdx);
+  Serial.print(" to id=");
   Serial.println(id);
   web.sendHeader("Location", "/hvacs");
   web.send(302, "text/plain", "");
@@ -3019,6 +3106,7 @@ void setupWeb() {
   web.on("/emitters/delete", HTTP_GET, handleEmittersDelete);
   web.on("/hvacs", handleHvacsPage);
   web.on("/hvacs/add", HTTP_POST, handleHvacsAdd);
+  web.on("/hvacs/clone", HTTP_POST, handleHvacsClone);
   web.on("/hvacs/test", HTTP_GET, handleHvacTestPage);
   web.on("/hvacs/test", HTTP_POST, handleHvacTest);
   web.on("/hvacs/update", HTTP_POST, handleHvacsUpdate);
@@ -3348,6 +3436,21 @@ bool startEthernet() {
   if (!started) {
     Serial.println("eth: begin failed");
     return false;
+  }
+
+  if (!config.wifi.dhcp) {
+    const bool staticComplete = config.wifi.ip != IPAddress() &&
+                                config.wifi.gateway != IPAddress() &&
+                                config.wifi.subnet != IPAddress();
+    if (staticComplete) {
+      bool ok = ETH.config(config.wifi.ip, config.wifi.gateway, config.wifi.subnet, config.wifi.dns);
+      Serial.println(ok ? "eth: static IP configured" : "eth: static IP config failed");
+    } else {
+      Serial.println("eth: static IP requested but incomplete values; falling back to DHCP");
+      ETH.config(INADDR_NONE, INADDR_NONE, INADDR_NONE);
+    }
+  } else {
+    ETH.config(INADDR_NONE, INADDR_NONE, INADDR_NONE);
   }
 
   unsigned long start = millis();
