@@ -1,0 +1,24 @@
+idf_component_register(
+    SRCS
+        "main.c"
+        "d3net_codec.c"
+        "d3net_gateway.c"
+        "modbus_rtu.c"
+        "config_store.c"
+        "wifi_manager.c"
+        "web_server.c"
+        "telnet_server.c"
+    INCLUDE_DIRS
+        "."
+    REQUIRES
+        esp_wifi
+        esp_event
+        esp_netif
+        nvs_flash
+        esp_http_server
+        app_update
+        json
+        lwip
+        driver
+        mdns
+)
