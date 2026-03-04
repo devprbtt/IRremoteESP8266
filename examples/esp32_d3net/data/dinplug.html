@@ -1,0 +1,182 @@
+<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
+<style>body{font-family:Arial,sans-serif;margin:0;background:#101319;color:#e6edf3}.wrap{max-width:1060px;margin:0 auto;padding:14px}.c{background:#171b22;border:1px solid #293042;border-radius:8px;padding:10px;margin:10px 0}nav{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px}a{color:#101319;background:#d0d7de;padding:6px 9px;border-radius:6px;text-decoration:none;font-weight:600}input,select,textarea,button{width:100%;box-sizing:border-box;margin:4px 0;padding:7px;border-radius:6px;border:1px solid #3a4458;background:#0f141b;color:#e6edf3}button{cursor:pointer;background:#2ea043;border:0;color:#fff;font-weight:600}button.s{background:#1f6feb}button.d{background:#8b949e}.r{display:grid;grid-template-columns:1fr 1fr;gap:8px}.m{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}table{width:100%;border-collapse:collapse;margin-top:6px}th,td{border-bottom:1px solid #293042;padding:6px;text-align:left;vertical-align:middle}th{font-size:12px;color:#9fb1c7}.num{max-width:110px}.muted{color:#9fb1c7;font-size:12px}pre{white-space:pre-wrap;word-break:break-word;background:#0f141b;border:1px solid #293042;border-radius:6px;padding:8px;max-height:180px;overflow:auto}</style>
+</head><body><div class='wrap'>
+<nav><a href='/'>Home</a><a href='/d3net'>D3Net</a><a href='/config'>Config</a><a href='/rtu'>RTU</a><a href='/dinplug'>DINplug</a><a href='/monitor'>Monitor</a><a href='/firmware'>Firmware</a></nav>
+<h2>DINplug</h2>
+<div class='c'>
+  <input id='gateway_host' placeholder='Gateway host/IP'>
+  <label><input id='auto_connect' type='checkbox' style='width:auto'> Auto connect on boot</label>
+  <p id='conn_state'>Connection: unknown</p>
+  <div class='r'><button class='s' onclick='connectNow()'>Connect now</button><button class='d' onclick='loadAll()'>Refresh status</button></div>
+</div>
+<div class='c'>
+  <h3>Keypad Button Actions</h3>
+  <p class='muted'>Configure mappings per HVAC unit, same payload used by hvactelnet keypad actions.</p>
+  <div class='m'>
+    <select id='unit_select'></select>
+    <input id='keypads_csv' placeholder='Keypad IDs CSV. Example: 101,102'>
+    <button class='s' onclick='saveUnitMapping()'>Save Unit Mapping</button>
+  </div>
+  <table id='map_table'>
+    <thead><tr><th>Keypad</th><th>Button</th><th>Press Action</th><th>Press Value</th><th>Hold Action</th><th>Hold Value</th><th></th></tr></thead>
+    <tbody id='map_rows'></tbody>
+  </table>
+  <div class='r'><button onclick='addRow()'>Add row</button><button class='d' onclick='clearRows()'>Clear rows</button></div>
+  <div class='r'><button onclick='loadExampleForUnit()'>Load example in current unit</button><button class='s' onclick='saveDinplug()'>Save DINplug Config</button></div>
+  <p class='muted'>Final JSON that will be saved in ESP32 flash:</p>
+  <pre id='json_preview'>[]</pre>
+</div>
+<script>
+const J=(u,o)=>fetch(u,o).then(r=>r.json());
+const P=(u,b)=>fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).then(r=>r.json().catch(()=>({ok:r.ok})));
+const actions=['none','temp_up','temp_down','set_temp','power_on','power_off','toggle_power','mode_heat','mode_cool','mode_fan','mode_auto','mode_off'];
+const needsValue=a=>a==='temp_up'||a==='temp_down'||a==='set_temp';
+let actionMaps=[],units=[];
+const E=id=>document.getElementById(id);
+
+function setConn(connected){E('conn_state').textContent='Connection: '+(connected?'connected':'disconnected');}
+function actionSelect(value){return `<select class='action'>${actions.map(a=>`<option value='${a}' ${a===value?'selected':''}>${a}</option>`).join('')}</select>`}
+function num(v,d=1){const n=Number(v);return Number.isFinite(n)?n:d}
+function parseKeypadsCsv(text){return Array.from(new Set((text||'').split(',').map(s=>parseInt(s.trim(),10)).filter(n=>Number.isInteger(n)&&n>0)))}
+
+function setSelectOptions(){
+  const sel=E('unit_select');
+  sel.innerHTML='';
+  if(!units.length){sel.innerHTML="<option value=''>No units available</option>";return;}
+  for(const u of units){
+    const o=document.createElement('option');
+    o.value=String(u.index);
+    o.textContent=`#${u.index} ${u.unit_id||''} ${u.online===false?'(offline)':''}`;
+    sel.appendChild(o);
+  }
+}
+
+function getCurrentUnitIndex(){return parseInt(E('unit_select').value||'-1',10)}
+function findMap(unitIndex){return actionMaps.find(m=>m.unit_index===unitIndex)}
+
+function syncRowValueState(tr){
+  const pAct=tr.querySelector('.pact'),pVal=tr.querySelector('.pval');
+  const hAct=tr.querySelector('.hact'),hVal=tr.querySelector('.hval');
+  if(pAct&&pVal){pVal.disabled=!needsValue(pAct.value);if(pVal.disabled)pVal.value='1'}
+  if(hAct&&hVal){hVal.disabled=!needsValue(hAct.value);if(hVal.disabled)hVal.value='1'}
+}
+
+function addRow(row={}){
+  const tr=document.createElement('tr');
+  tr.innerHTML=`<td><input class='num kid' type='number' min='1' value='${num(row.keypad_id,0)||''}'></td>
+<td><input class='num bid' type='number' min='1' value='${num(row.id,0)||''}'></td>
+<td>${actionSelect(row.press_action||'none').replace("class='action'","class='action pact'")}</td>
+<td><input class='num pval' type='number' step='0.5' value='${num(row.press_value,1)}'></td>
+<td>${actionSelect(row.hold_action||'none').replace("class='action'","class='action hact'")}</td>
+<td><input class='num hval' type='number' step='0.5' value='${num(row.hold_value,1)}'></td>
+<td><button class='d' style='margin:0' onclick='this.closest("tr").remove();refreshPreview()'>Remove</button></td>`;
+  tr.querySelector('.pact').onchange=()=>{syncRowValueState(tr);refreshPreview();};
+  tr.querySelector('.hact').onchange=()=>{syncRowValueState(tr);refreshPreview();};
+  tr.querySelectorAll('input,select').forEach(el=>el.onchange=refreshPreview);
+  E('map_rows').appendChild(tr);
+  syncRowValueState(tr);
+}
+
+function clearRows(){E('map_rows').innerHTML='';refreshPreview();}
+
+function collectRows(){
+  const rows=[];
+  E('map_rows').querySelectorAll('tr').forEach(tr=>{
+    const kid=parseInt(tr.querySelector('.kid').value||'0',10);
+    const bid=parseInt(tr.querySelector('.bid').value||'0',10);
+    if(!kid||!bid)return;
+    rows.push({
+      keypad_id:kid,id:bid,
+      press_action:tr.querySelector('.pact').value||'none',
+      press_value:num(tr.querySelector('.pval').value,1),
+      hold_action:tr.querySelector('.hact').value||'none',
+      hold_value:num(tr.querySelector('.hval').value,1)
+    });
+  });
+  return rows;
+}
+
+function saveUnitMapping(){
+  const unitIndex=getCurrentUnitIndex();
+  if(!Number.isInteger(unitIndex)||unitIndex<0){alert('Select a unit first');return;}
+  const keypads=parseKeypadsCsv(E('keypads_csv').value);
+  const buttons=collectRows();
+  const idx=actionMaps.findIndex(m=>m.unit_index===unitIndex);
+  const entry={unit_index:unitIndex,keypads,buttons};
+  if(idx>=0)actionMaps[idx]=entry;else actionMaps.push(entry);
+  refreshPreview();
+  alert('Unit mapping staged. Click "Save DINplug Config" to persist.');
+}
+
+function renderUnitMapping(){
+  const unitIndex=getCurrentUnitIndex();
+  const current=findMap(unitIndex)||{keypads:[],buttons:[]};
+  E('keypads_csv').value=(current.keypads||[]).join(',');
+  E('map_rows').innerHTML='';
+  (current.buttons||[]).forEach(addRow);
+  if(!current.buttons||!current.buttons.length){for(let i=0;i<4;i++)addRow({});}
+  refreshPreview();
+}
+
+function refreshPreview(){
+  const unitIndex=getCurrentUnitIndex();
+  if(Number.isInteger(unitIndex)&&unitIndex>=0){
+    const keypads=parseKeypadsCsv(E('keypads_csv').value);
+    const buttons=collectRows();
+    const idx=actionMaps.findIndex(m=>m.unit_index===unitIndex);
+    const entry={unit_index:unitIndex,keypads,buttons};
+    if(idx>=0)actionMaps[idx]=entry;
+  }
+  actionMaps=actionMaps.filter(m=>Number.isInteger(m.unit_index)&&m.unit_index>=0);
+  E('json_preview').textContent=JSON.stringify(actionMaps,null,2);
+}
+
+function loadExampleForUnit(){
+  clearRows();
+  const pads=parseKeypadsCsv(E('keypads_csv').value);
+  const keypad=pads[0]||101;
+  E('keypads_csv').value=String(keypad);
+  addRow({keypad_id:keypad,id:1,press_action:'temp_up',press_value:1,hold_action:'none',hold_value:1});
+  addRow({keypad_id:keypad,id:2,press_action:'temp_down',press_value:1,hold_action:'none',hold_value:1});
+  addRow({keypad_id:keypad,id:3,press_action:'toggle_power',press_value:1,hold_action:'mode_cool',hold_value:1});
+  addRow({keypad_id:keypad,id:4,press_action:'set_temp',press_value:24,hold_action:'mode_heat',hold_value:1});
+  refreshPreview();
+}
+
+async function loadDinplug(){
+  const r=await J('/api/dinplug');
+  E('gateway_host').value=r.gateway_host||'';
+  E('auto_connect').checked=!!r.auto_connect;
+  setConn(!!r.connected);
+  try{const p=JSON.parse(r.actions_json||'[]');actionMaps=Array.isArray(p)?p:[]}catch(_){actionMaps=[]}
+}
+
+async function loadUnits(){
+  const r=await J('/api/registry');
+  units=(r.units||[]).sort((a,b)=>(a.index||0)-(b.index||0));
+  setSelectOptions();
+}
+
+async function loadAll(){
+  await Promise.all([loadDinplug(),loadUnits()]);
+  renderUnitMapping();
+}
+
+async function saveDinplug(){
+  refreshPreview();
+  const actionsJson=JSON.stringify(actionMaps);
+  if(actionsJson.length>3900){alert('Action mapping JSON is too large for storage. Reduce rows.');return;}
+  const r=await P('/api/dinplug/save',{gateway_host:E('gateway_host').value,auto_connect:E('auto_connect').checked,actions_json:actionsJson});
+  alert(r.ok?'Saved':'Save failed');
+  setTimeout(loadAll,500);
+}
+
+async function connectNow(){
+  const r=await fetch('/api/dinplug/connect',{method:'POST'});
+  if(!r.ok){alert('Connect request failed');return;}
+  setTimeout(loadAll,1200);
+}
+
+E('unit_select').addEventListener('change',renderUnitMapping);
+loadAll();setInterval(loadDinplug,5000);
+</script></div></body></html>

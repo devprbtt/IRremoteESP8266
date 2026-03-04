@@ -1,0 +1,22 @@
+<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
+<style>body{font-family:Arial,sans-serif;margin:0;background:#101319;color:#e6edf3}.wrap{max-width:980px;margin:0 auto;padding:14px}.c{background:#171b22;border:1px solid #293042;border-radius:8px;padding:10px;margin:10px 0}nav{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px}a{color:#101319;background:#d0d7de;padding:6px 9px;border-radius:6px;text-decoration:none;font-weight:600}.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}pre{white-space:pre-wrap;word-break:break-word;background:#0f141b;border:1px solid #3a4458;padding:8px;border-radius:6px}</style>
+</head><body><div class='wrap'>
+<nav><a href='/'>Home</a><a href='/d3net'>D3Net</a><a href='/config'>Config</a><a href='/rtu'>RTU</a><a href='/dinplug'>DINplug</a><a href='/monitor'>Monitor</a><a href='/firmware'>Firmware</a></nav>
+<h2>Daikin D3Net Controller</h2>
+<div class='grid'>
+  <div class='c'><b>Network</b><pre id='net'>loading...</pre></div>
+  <div class='c'><b>System</b><pre id='sys'>loading...</pre></div>
+</div>
+<div class='c'><b>Discovered Units</b><pre id='units'>loading...</pre></div>
+<script>
+const J=(u,o)=>fetch(u,o).then(r=>r.json());
+async function refresh(){
+  let s=await J('/api/status');
+  let c=await J('/api/config');
+  let r=await J('/api/registry');
+  net.textContent=`STA: ${s.wifi.connected?'connected':'disconnected'}\nIP: ${s.wifi.ip||'-'}\nHostname: ${(s.hostname||'-')}.local\nTelnet: ${s.telnet_port||23}`;
+  sys.textContent=`OTA active: ${s.ota&&s.ota.active?'yes':'no'}\nOTA status: ${(s.ota&&s.ota.message)||'idle'}\nDHCP: ${c.wifi&&c.wifi.dhcp?'on':'off'}\nDINplug host: ${(c.dinplug&&c.dinplug.gateway_host)||'-'}`;
+  units.textContent=`Total: ${(r.units||[]).length}\n\n`+JSON.stringify(r.units||[],null,2);
+}
+setInterval(refresh,3000);refresh();
+</script></div></body></html>

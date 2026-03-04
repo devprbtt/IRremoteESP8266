@@ -1,0 +1,22 @@
+<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
+<style>body{font-family:Arial,sans-serif;margin:0;background:#101319;color:#e6edf3}.wrap{max-width:980px;margin:0 auto;padding:14px}.c{background:#171b22;border:1px solid #293042;border-radius:8px;padding:10px;margin:10px 0}nav{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px}a{color:#101319;background:#d0d7de;padding:6px 9px;border-radius:6px;text-decoration:none;font-weight:600}input,select,textarea,button{width:100%;box-sizing:border-box;margin:4px 0;padding:7px;border-radius:6px;border:1px solid #3a4458;background:#0f141b;color:#e6edf3}button{cursor:pointer;background:#2ea043;border:0;color:#fff;font-weight:600}button.s{background:#1f6feb}.r{display:grid;grid-template-columns:1fr 1fr;gap:8px}.scan{display:flex;align-items:center;gap:8px;font-size:12px;color:#9fb1c7}.spin{display:inline-block;width:12px;height:12px;border:2px solid #3a4458;border-top-color:#1f6feb;border-radius:50%;animation:sp .8s linear infinite;visibility:hidden}@keyframes sp{to{transform:rotate(360deg)}}</style>
+</head><body><div class='wrap'>
+<nav><a href='/'>Home</a><a href='/d3net'>D3Net</a><a href='/config'>Config</a><a href='/rtu'>RTU</a><a href='/dinplug'>DINplug</a><a href='/monitor'>Monitor</a><a href='/firmware'>Firmware</a></nav>
+<h2>Config</h2><div class='c'><input id='ssid' placeholder='SSID'>
+<div class='r'><select id='ssid_select' onchange='ssid.value=this.value'><option value=''>scan...</option></select><button id='scanBtn' type='button' class='s' onclick='scanWifi()'>Scan</button></div>
+<div class='scan'><span id='scanSpin' class='spin'></span><span id='scanStatus'>Idle</span></div>
+<input id='pass' placeholder='Password' type='password'><label><input id='dhcp' type='checkbox' checked style='width:auto'> DHCP</label>
+<div class='r'><input id='ip' placeholder='IP'><input id='gateway' placeholder='Gateway'></div><div class='r'><input id='subnet' placeholder='Subnet'><input id='dns' placeholder='DNS'></div>
+<div class='r'><input id='hostname' placeholder='Hostname'><input id='telnet_port' type='number' min='1' max='65535' placeholder='Telnet port'></div><button onclick='saveNetwork()'>Save and reboot</button></div>
+<script>
+const J=(u,o)=>fetch(u,o).then(r=>r.json()),P=(u,b)=>fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
+const scanBtn=document.getElementById('scanBtn');
+const scanSpin=document.getElementById('scanSpin');
+const scanStatus=document.getElementById('scanStatus');
+function setDhcpState(){const off=!document.getElementById('dhcp').checked;['ip','gateway','subnet','dns'].forEach(id=>{let el=document.getElementById(id);if(el)el.disabled=off;});}
+function setScanState(active,msg){scanSpin.style.visibility=active?'visible':'hidden';scanBtn.disabled=active;scanStatus.innerText=msg;}
+async function loadConfig(){let c=await J('/api/config');ssid.value=c.wifi.ssid||'';pass.value=c.wifi.password||'';dhcp.checked=(c.wifi.dhcp!==false);ip.value=c.wifi.ip||'';gateway.value=c.wifi.gateway||'';subnet.value=c.wifi.subnet||'';dns.value=c.wifi.dns||'';hostname.value=c.hostname||'daikin-d3net';telnet_port.value=c.telnet_port||23;setDhcpState();}
+async function scanWifi(){setScanState(true,'Scanning WiFi networks...');try{let r=await J('/api/wifi/scan');let list=r.networks||r.items||[];let s=document.getElementById('ssid_select');s.innerHTML='';let p=document.createElement('option');p.value='';p.text=list.length?'Select AP':'No APs';s.appendChild(p);for(let ap of list){let o=document.createElement('option');o.value=ap.ssid;o.text=(ap.ssid||'')+' ('+ap.rssi+')';s.appendChild(o);}setScanState(false,'Scan complete: '+list.length+' network(s)');}catch(e){setScanState(false,'Scan failed');}}
+async function saveNetwork(){let q=document.getElementById('ssid_select').value;let b={ssid:ssid.value||q,password:pass.value,dhcp:dhcp.checked,ip:ip.value,gateway:gateway.value,subnet:subnet.value,dns:dns.value,hostname:hostname.value,telnet_port:parseInt(telnet_port.value||'23')};await P('/api/config/save',b);alert('Saved. Device will reboot.');}
+document.getElementById('dhcp').addEventListener('change',setDhcpState);loadConfig();setScanState(false,'Idle');
+</script></div></body></html>

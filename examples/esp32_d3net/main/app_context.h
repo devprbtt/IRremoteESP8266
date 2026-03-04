@@ -33,6 +33,9 @@ typedef struct {
     char sta_dns[16];
     char hostname[33];
     uint16_t telnet_port;
+    char din_gateway_host[64];
+    bool din_auto_connect;
+    char din_actions_json[4096];
     uint64_t registered_mask;
     char registered_ids[D3NET_MAX_UNITS][6];
     modbus_rtu_config_t rtu_cfg;

@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #include "esp_http_server.h"
 #include "esp_err.h"
@@ -28,21 +29,53 @@ typedef struct {
 
 static app_context_t s_app;
 
-static void start_mdns(const app_context_t *app) {
-    esp_err_t err = mdns_init();
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        ESP_LOGW(TAG, "mDNS init failed: %s", esp_err_to_name(err));
+static void make_mdns_hostname(const char *in, char *out, size_t out_len) {
+    if (out == NULL || out_len == 0U) {
+        return;
+    }
+    out[0] = '\0';
+    if (in == NULL || in[0] == '\0') {
+        strncpy(out, DEFAULT_HOSTNAME, out_len - 1U);
+        out[out_len - 1U] = '\0';
         return;
     }
 
-    const char *hostname = (app->config.hostname[0] != '\0') ? app->config.hostname : DEFAULT_HOSTNAME;
-    uint16_t telnet_port = (app->config.telnet_port == 0U) ? 23U : app->config.telnet_port;
-    ESP_ERROR_CHECK(mdns_hostname_set(hostname));
-    ESP_ERROR_CHECK(mdns_instance_name_set("Daikin D3Net Controller"));
-    ESP_ERROR_CHECK(mdns_service_add("Daikin D3Net Web", "_http", "_tcp", 80, NULL, 0));
-    ESP_ERROR_CHECK(mdns_service_add("Daikin D3Net Telnet", "_telnet", "_tcp", telnet_port, NULL, 0));
+    size_t j = 0;
+    for (size_t i = 0; in[i] != '\0' && j + 1U < out_len; i++) {
+        unsigned char ch = (unsigned char)in[i];
+        if (isalnum(ch)) {
+            out[j++] = (char)tolower(ch);
+        } else if (ch == '-' || ch == '_' || ch == ' ') {
+            if (j > 0 && out[j - 1] != '-') {
+                out[j++] = '-';
+            }
+        }
+    }
+    while (j > 0 && out[j - 1] == '-') {
+        j--;
+    }
+    out[j] = '\0';
 
-    ESP_LOGI(TAG, "mDNS started: http://%s.local", hostname);
+    if (out[0] == '\0') {
+        strncpy(out, DEFAULT_HOSTNAME, out_len - 1U);
+        out[out_len - 1U] = '\0';
+    }
+}
+
+static void start_mdns(const app_context_t *app) {
+    char host[64] = {0};
+    make_mdns_hostname(app != NULL ? app->config.hostname : NULL, host, sizeof(host));
+
+    esp_err_t err = mdns_init();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "mDNS init failed: %s", esp_err_to_name(err));
+        return;
+    }
+    mdns_hostname_set(host);
+    mdns_instance_name_set("Daikin D3Net");
+    mdns_service_add("Web UI", "_http", "_tcp", 80, NULL, 0);
+    mdns_service_add("Telnet", "_telnet", "_tcp", app != NULL ? app->config.telnet_port : 23, NULL, 0);
+    ESP_LOGI(TAG, "mDNS ready: http://%s.local", host);
 }
 
 static esp_err_t rtu_read_registers(
@@ -117,6 +150,7 @@ void app_main(void) {
     }
 
     ESP_ERROR_CHECK(wifi_manager_start_apsta("DaikinD3Net-Setup", "daikinsetup", s_app.config.hostname));
+    start_mdns(&s_app);
     err = wifi_manager_set_sta_network(
         s_app.config.sta_dhcp,
         s_app.config.sta_ip,
@@ -153,7 +187,6 @@ void app_main(void) {
     httpd_handle_t web = NULL;
     ESP_ERROR_CHECK(web_server_start(&s_app, &web));
     ESP_ERROR_CHECK(telnet_server_start(&s_app));
-    start_mdns(&s_app);
     xTaskCreate(poll_task, "d3net_poll", 6144, &s_app, 5, NULL);
 
     ESP_LOGI(TAG, "system started: AP setup SSID=DaikinD3Net-Setup");

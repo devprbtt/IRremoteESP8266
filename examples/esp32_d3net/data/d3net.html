@@ -1,0 +1,21 @@
+<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
+<style>body{font-family:Arial,sans-serif;margin:0;background:#101319;color:#e6edf3}.wrap{max-width:980px;margin:0 auto;padding:14px}.c{background:#171b22;border:1px solid #293042;border-radius:8px;padding:10px;margin:10px 0}nav{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px}a{color:#101319;background:#d0d7de;padding:6px 9px;border-radius:6px;text-decoration:none;font-weight:600}input,select,textarea,button{width:100%;box-sizing:border-box;margin:4px 0;padding:7px;border-radius:6px;border:1px solid #3a4458;background:#0f141b;color:#e6edf3}button{cursor:pointer;background:#2ea043;border:0;color:#fff;font-weight:600}button.s{background:#1f6feb}.r{display:grid;grid-template-columns:1fr 1fr;gap:8px}</style>
+</head><body><div class='wrap'>
+<nav><a href='/'>Home</a><a href='/d3net'>D3Net</a><a href='/config'>Config</a><a href='/rtu'>RTU</a><a href='/dinplug'>DINplug</a><a href='/monitor'>Monitor</a><a href='/firmware'>Firmware</a></nav>
+<h2>D3Net</h2><div class='c'><div id='s'>loading...</div></div>
+<div class='c'><div class='r'><button onclick='scan()'>Scan</button><button class='s' onclick='load()'>Refresh</button></div><pre id='u'></pre></div>
+<div class='c'><div class='r'><input id='i' type='number' placeholder='Unit index'><select id='p'><option value='1'>Power on</option><option value='0'>Power off</option></select></div>
+<div class='r'><select id='m'><option value='0'>Fan</option><option value='1'>Heat</option><option value='2'>Cool</option><option value='3'>Auto</option><option value='4'>Vent</option><option value='7'>Dry</option></select>
+<input id='sp' type='number' step='0.5' placeholder='Setpoint'></div><div class='r'><select id='fs'><option value='0'>Fan auto</option><option value='1'>Low</option><option value='2'>Low-med</option><option value='3'>Med</option><option value='4'>Hi-med</option><option value='5'>High</option></select>
+<select id='fd'><option value='0'>Dir p0</option><option value='1'>Dir p1</option><option value='2'>Dir p2</option><option value='3'>Dir p3</option><option value='4'>Dir p4</option><option value='6'>Stop</option><option value='7'>Swing</option></select></div>
+<div class='r'><button onclick='reg("add")'>Register</button><button class='s' onclick='reg("remove")'>Unregister</button></div><div class='r'><button onclick='cmd()'>Send cmd</button><button class='s' onclick='filterReset()'>Filter reset</button></div></div>
+<script>
+const J=(u,o)=>fetch(u,o).then(r=>r.json()),P=(u,b)=>fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}),G=id=>document.getElementById(id),N=id=>parseInt(G(id).value||'0',10);
+async function status(){let s=await J('/api/status');G('s').textContent='STA:'+(s.wifi.connected?'up':'down')+' '+(s.wifi.ip||'')+' Host:'+((s.hostname||'')+'.local')+' Telnet:'+(s.telnet_port||23)}
+async function load(){let r=await J('/api/registry');G('u').textContent=JSON.stringify(r.units||[],null,2)}
+async function scan(){await fetch('/api/discover',{method:'POST'});setTimeout(load,500)}
+async function reg(action){await P('/api/registry',{index:N('i'),action});load()}
+async function cmd(){const i=N('i');const a=[['power',N('p')],['mode',N('m')],['setpoint',parseFloat(G('sp').value)],['fan_speed',N('fs')],['fan_dir',N('fd')]];for(const t of a){if(Number.isNaN(t[1]))continue;await P('/api/hvac/cmd',{index:i,cmd:t[0],value:t[1]})}setTimeout(load,300)}
+async function filterReset(){await P('/api/hvac/cmd',{index:N('i'),cmd:'filter_reset'});setTimeout(load,300)}
+setInterval(load,3000);status();load();
+</script></div></body></html>

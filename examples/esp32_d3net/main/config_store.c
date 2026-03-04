@@ -21,6 +21,9 @@ static void set_network_defaults(app_config_t *cfg) {
     strncpy(cfg->hostname, DEFAULT_HOSTNAME, sizeof(cfg->hostname) - 1U);
     cfg->hostname[sizeof(cfg->hostname) - 1U] = '\0';
     cfg->telnet_port = DEFAULT_TELNET_PORT;
+    cfg->din_gateway_host[0] = '\0';
+    cfg->din_auto_connect = false;
+    cfg->din_actions_json[0] = '\0';
 }
 
 static void set_rtu_defaults(app_config_t *cfg) {
@@ -99,6 +102,18 @@ esp_err_t config_store_load(app_config_t *cfg) {
     if (nvs_get_u16(nvs, "tel_port", &telnet_port) == ESP_OK && telnet_port > 0U) {
         cfg->telnet_port = telnet_port;
     }
+    size_t din_host_len = sizeof(cfg->din_gateway_host);
+    if (nvs_get_str(nvs, "din_host", cfg->din_gateway_host, &din_host_len) != ESP_OK) {
+        cfg->din_gateway_host[0] = '\0';
+    }
+    uint8_t din_auto = 0U;
+    if (nvs_get_u8(nvs, "din_auto", &din_auto) == ESP_OK) {
+        cfg->din_auto_connect = din_auto != 0U;
+    }
+    size_t din_actions_len = sizeof(cfg->din_actions_json);
+    if (nvs_get_str(nvs, "din_actions", cfg->din_actions_json, &din_actions_len) != ESP_OK) {
+        cfg->din_actions_json[0] = '\0';
+    }
 
     uint64_t mask = 0;
     size_t ids_len = sizeof(cfg->registered_ids);
@@ -152,6 +167,15 @@ esp_err_t config_store_save(const app_config_t *cfg) {
     }
     if (err == ESP_OK) {
         err = nvs_set_u16(nvs, "tel_port", cfg->telnet_port);
+    }
+    if (err == ESP_OK) {
+        err = nvs_set_str(nvs, "din_host", cfg->din_gateway_host);
+    }
+    if (err == ESP_OK) {
+        err = nvs_set_u8(nvs, "din_auto", cfg->din_auto_connect ? 1U : 0U);
+    }
+    if (err == ESP_OK) {
+        err = nvs_set_str(nvs, "din_actions", cfg->din_actions_json);
     }
     if (err == ESP_OK) {
         err = nvs_set_u64(nvs, "reg_mask", cfg->registered_mask);

@@ -13,6 +13,8 @@ void telnet_server_logf(const char *fmt, ...);
 void telnet_server_clear_logs(void);
 void telnet_server_set_monitor_enabled(bool enabled);
 bool telnet_server_monitor_enabled(void);
+void telnet_server_request_dinplug_connect(void);
+bool telnet_server_dinplug_connected(void);
 typedef struct {
     char line[160];
     uint32_t seq;
