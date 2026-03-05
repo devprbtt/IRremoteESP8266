@@ -1,0 +1,10 @@
+Command: ninja flash
+fatal: bad config line 2 in file C:/Espressif/v5.5.1/esp-idf/.git/modules/components/bootloader/subproject/components/micro-ecc/micro-ecc/config
+fatal: bad config line 2 in file C:/Espressif/v5.5.1/esp-idf/.git/modules/components/openthread/openthread/config
+CMake Error at run_serial_tool.cmake:67 (message):
+  
+  I:/espressif_tools/python_env/idf5.5_py3.13_env/Scripts/python.exe;;C:/Espressif/v5.5.1/esp-idf/components/esptool_py/esptool/esptool.py;--chip;esp32
+  failed.
+
+
+

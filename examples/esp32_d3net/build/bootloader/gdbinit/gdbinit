@@ -1,0 +1,2 @@
+source I:/irhvactelnet/IRremoteESP8266/examples/esp32_d3net/build/bootloader/gdbinit/symbols
+source I:/irhvactelnet/IRremoteESP8266/examples/esp32_d3net/build/bootloader/gdbinit/connect

@@ -68,7 +68,7 @@ static esp_err_t mount_web_fs(void) {
         .base_path = WEB_FS_BASE,
         .partition_label = "spiffs",
         .max_files = 8,
-        .format_if_mount_failed = false,
+        .format_if_mount_failed = true,
     };
 
     esp_err_t err = esp_vfs_spiffs_register(&conf);
@@ -150,6 +150,31 @@ static int recv_body(httpd_req_t *req, char **out, size_t *out_len) {
     *out = buf;
     *out_len = (size_t)total;
     return ESP_OK;
+}
+
+static bool await_sta_ip(char *ip_out, size_t ip_out_len, uint32_t timeout_ms) {
+    if (ip_out != NULL && ip_out_len > 0U) {
+        ip_out[0] = '\0';
+    }
+    const TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(timeout_ms);
+    while (xTaskGetTickCount() <= deadline) {
+        char ip[32] = {0};
+        if (wifi_manager_sta_connected() && wifi_manager_sta_ip(ip, sizeof(ip)) == ESP_OK && strcmp(ip, "0.0.0.0") != 0) {
+            if (ip_out != NULL && ip_out_len > 0U) {
+                copy_string(ip_out, ip_out_len, ip);
+            }
+            return true;
+        }
+        vTaskDelay(pdMS_TO_TICKS(250));
+    }
+
+    if (ip_out != NULL && ip_out_len > 0U) {
+        char ip[32] = {0};
+        if (wifi_manager_sta_ip(ip, sizeof(ip)) == ESP_OK && strcmp(ip, "0.0.0.0") != 0) {
+            copy_string(ip_out, ip_out_len, ip);
+        }
+    }
+    return false;
 }
 
 static esp_err_t handle_index_get(httpd_req_t *req) {
@@ -363,15 +388,26 @@ static esp_err_t handle_api_config_save_post(httpd_req_t *req) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "invalid ip config");
         return err;
     }
+    bool sta_connected = false;
+    char sta_ip[32] = {0};
     if (app->config.sta_configured) {
         err = wifi_manager_connect_sta(app->config.sta_ssid, app->config.sta_password);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "STA connect failed after save: %s", esp_err_to_name(err));
+        } else {
+            sta_connected = await_sta_ip(sta_ip, sizeof(sta_ip), 8000U);
         }
     }
     config_store_save(&app->config);
-    httpd_resp_sendstr(req, "{\"ok\":true,\"reboot\":true}");
-    vTaskDelay(pdMS_TO_TICKS(1200));
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    cJSON_AddBoolToObject(root, "reboot", true);
+    cJSON_AddBoolToObject(root, "sta_connected", sta_connected);
+    cJSON_AddStringToObject(root, "sta_ip", sta_ip);
+    http_reply_json(req, root);
+
+    vTaskDelay(pdMS_TO_TICKS(2500));
     esp_restart();
     return ESP_OK;
 }
@@ -419,6 +455,22 @@ static esp_err_t handle_dinplug_save_post(httpd_req_t *req) {
 
 static esp_err_t handle_dinplug_connect_post(httpd_req_t *req) {
     app_context_t *app = (app_context_t *)req->user_ctx;
+    if (req->content_len > 0) {
+        char *body = NULL;
+        size_t body_len = 0;
+        if (recv_body(req, &body, &body_len) == ESP_OK && body != NULL) {
+            cJSON *json = cJSON_ParseWithLength(body, body_len);
+            free(body);
+            if (json != NULL) {
+                cJSON *host = cJSON_GetObjectItem(json, "gateway_host");
+                if (cJSON_IsString(host) && host->valuestring != NULL) {
+                    copy_string(app->config.din_gateway_host, sizeof(app->config.din_gateway_host), host->valuestring);
+                    config_store_save(&app->config);
+                }
+                cJSON_Delete(json);
+            }
+        }
+    }
     if (app->config.din_gateway_host[0] == '\0') {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "gateway host not configured");
         return ESP_ERR_INVALID_STATE;
@@ -650,8 +702,13 @@ static esp_err_t handle_logs_get(httpd_req_t *req) {
             since = (uint32_t)strtoul(buf, NULL, 10);
         }
     }
-    telnet_log_line_t lines[64];
-    size_t count = telnet_server_get_logs(since, lines, 64);
+    const size_t max_lines = 32;
+    telnet_log_line_t *lines = calloc(max_lines, sizeof(telnet_log_line_t));
+    if (lines == NULL) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "oom");
+        return ESP_ERR_NO_MEM;
+    }
+    size_t count = telnet_server_get_logs(since, lines, max_lines);
 
     cJSON *root = cJSON_CreateObject();
     cJSON *arr = cJSON_CreateArray();
@@ -668,6 +725,7 @@ static esp_err_t handle_logs_get(httpd_req_t *req) {
     cJSON_AddItemToObject(root, "lines", arr);
     cJSON_AddNumberToObject(root, "latest", latest);
     cJSON_AddBoolToObject(root, "enabled", telnet_server_monitor_enabled());
+    free(lines);
     return http_reply_json(req, root);
 }
 

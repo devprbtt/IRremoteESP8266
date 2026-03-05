@@ -1,0 +1,9 @@
+Command: cmake -G Ninja -DPYTHON_DEPS_CHECKED=1 -DPYTHON=I:\espressif_tools\python_env\idf5.5_py3.13_env\Scripts\python.exe -DESP_PLATFORM=1 -DIDF_CCACHE_ENABLE=0 -DCCACHE_ENABLE=0 -DCCACHE_ENABLE=1 I:\irhvactelnet\IRremoteESP8266\examples\esp32_d3net
+fatal: bad config line 2 in file C:/Espressif/v5.5.1/esp-idf/.git/modules/components/bootloader/subproject/components/micro-ecc/micro-ecc/config
+fatal: bad config line 2 in file C:/Espressif/v5.5.1/esp-idf/.git/modules/components/openthread/openthread/config
+CMake Warning:
+  Manually-specified variables were not used by the project:
+
+    IDF_CCACHE_ENABLE
+
+

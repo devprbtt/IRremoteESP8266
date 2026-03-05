@@ -8,36 +8,114 @@
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "lwip/inet.h"
 
 static const char *TAG = "wifi_manager";
 
 static bool s_sta_connected = false;
+static bool s_sta_connecting = false;
 static esp_netif_t *s_netif_sta = NULL;
 static TaskHandle_t s_reconnect_task = NULL;
 static bool s_sta_cfg_set = false;
+static TickType_t s_retry_after_tick = 0;
+static bool s_ap_cfg_valid = false;
+static wifi_config_t s_ap_cfg = {0};
+static bool s_ap_hidden = false;
+
+static esp_err_t wifi_manager_set_ap_hidden(bool hidden) {
+    if (!s_ap_cfg_valid) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (hidden == s_ap_hidden) {
+        return ESP_OK;
+    }
+
+    wifi_config_t cfg = s_ap_cfg;
+    cfg.ap.ssid_hidden = hidden ? 1U : 0U;
+
+    esp_err_t err = esp_wifi_set_config(WIFI_IF_AP, &cfg);
+    if (err != ESP_OK) {
+        return err;
+    }
+    s_ap_cfg = cfg;
+    s_ap_hidden = hidden;
+    ESP_LOGI(TAG, "setup AP %s", hidden ? "hidden (STA connected)" : "visible");
+    return ESP_OK;
+}
+
+static bool should_retry_now(void) {
+    if (!s_sta_cfg_set || s_sta_connected || s_sta_connecting) {
+        return false;
+    }
+    TickType_t now = xTaskGetTickCount();
+    return (s_retry_after_tick == 0) || (now >= s_retry_after_tick);
+}
+
+static void schedule_retry_ms(uint32_t delay_ms) {
+    s_retry_after_tick = xTaskGetTickCount() + pdMS_TO_TICKS(delay_ms);
+}
+
+static uint32_t retry_delay_ms_for_reason(uint8_t reason) {
+    switch (reason) {
+        case WIFI_REASON_NO_AP_FOUND:
+#ifdef WIFI_REASON_NO_AP_FOUND_IN_AUTHMODE_THRESHOLD
+        case WIFI_REASON_NO_AP_FOUND_IN_AUTHMODE_THRESHOLD:
+#endif
+            return 20000U;
+        case WIFI_REASON_AUTH_EXPIRE:
+        case WIFI_REASON_AUTH_FAIL:
+        case WIFI_REASON_HANDSHAKE_TIMEOUT:
+        case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT:
+            return 15000U;
+        default:
+            return 5000U;
+    }
+}
 
 static void wifi_reconnect_task(void *arg) {
     (void)arg;
     while (true) {
-        if (s_sta_cfg_set && !s_sta_connected) {
-            ESP_LOGW(TAG, "STA not connected, retrying connect");
-            esp_wifi_connect();
+        if (should_retry_now()) {
+            esp_err_t err = esp_wifi_connect();
+            if (err == ESP_OK) {
+                s_sta_connecting = true;
+                ESP_LOGW(TAG, "STA not connected, retrying connect");
+                schedule_retry_ms(5000U);
+            } else if (err == ESP_ERR_WIFI_STATE) {
+                // Wi-Fi stack is already connecting; avoid repeated calls.
+                s_sta_connecting = true;
+                schedule_retry_ms(5000U);
+            } else {
+                ESP_LOGW(TAG, "STA reconnect request failed: %s", esp_err_to_name(err));
+                schedule_retry_ms(5000U);
+            }
         }
-        vTaskDelay(pdMS_TO_TICKS(5000));
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
 
 static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data) {
     (void)arg;
-    (void)event_data;
 
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        const wifi_event_sta_disconnected_t *dis = (const wifi_event_sta_disconnected_t *)event_data;
+        uint8_t reason = dis != NULL ? dis->reason : 0;
+        uint32_t delay_ms = retry_delay_ms_for_reason(reason);
         s_sta_connected = false;
-        esp_wifi_connect();
-        ESP_LOGW(TAG, "STA disconnected, reconnecting");
+        s_sta_connecting = false;
+        (void)wifi_manager_set_ap_hidden(false);
+        schedule_retry_ms(delay_ms);
+        ESP_LOGW(TAG, "STA disconnected (reason=%u), next retry in %u ms", reason, (unsigned)delay_ms);
+    } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
+        // Stay in "connecting" state until GOT_IP to avoid duplicate connect attempts.
+        s_sta_connecting = true;
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         s_sta_connected = true;
+        s_sta_connecting = false;
+        s_retry_after_tick = 0;
+        (void)wifi_manager_set_ap_hidden(true);
         ESP_LOGI(TAG, "STA got IP");
     }
 }
@@ -86,6 +164,9 @@ esp_err_t wifi_manager_start_apsta(const char *ap_ssid, const char *ap_password,
     } else {
         ap_cfg.ap.authmode = WIFI_AUTH_OPEN;
     }
+    memcpy(&s_ap_cfg, &ap_cfg, sizeof(s_ap_cfg));
+    s_ap_cfg_valid = true;
+    s_ap_hidden = false;
 
     err = esp_wifi_set_mode(WIFI_MODE_APSTA);
     if (err != ESP_OK) {
@@ -178,7 +259,15 @@ esp_err_t wifi_manager_connect_sta(const char *ssid, const char *password) {
         return err;
     }
     s_sta_cfg_set = true;
-    return esp_wifi_connect();
+    s_sta_connected = false;
+    s_sta_connecting = false;
+    schedule_retry_ms(0);
+    err = esp_wifi_connect();
+    if (err == ESP_OK || err == ESP_ERR_WIFI_STATE) {
+        s_sta_connecting = true;
+        return ESP_OK;
+    }
+    return err;
 }
 
 bool wifi_manager_sta_connected(void) {

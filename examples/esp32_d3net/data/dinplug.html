@@ -6,7 +6,7 @@
 <div class='c'>
   <input id='gateway_host' placeholder='Gateway host/IP'>
   <label><input id='auto_connect' type='checkbox' style='width:auto'> Auto connect on boot</label>
-  <p id='conn_state'>Connection: unknown</p>
+  <p class='scan'><span id='conn_spin' class='spin'></span><span id='conn_state'>Connection: unknown</span></p>
   <div class='r'><button class='s' onclick='connectNow()'>Connect now</button><button class='d' onclick='loadAll()'>Refresh status</button></div>
 </div>
 <div class='c'>
@@ -18,7 +18,7 @@
     <button class='s' onclick='saveUnitMapping()'>Save Unit Mapping</button>
   </div>
   <table id='map_table'>
-    <thead><tr><th>Keypad</th><th>Button</th><th>Press Action</th><th>Press Value</th><th>Hold Action</th><th>Hold Value</th><th></th></tr></thead>
+    <thead><tr><th>Keypad</th><th>Button</th><th>Press Action</th><th>Press Value</th><th>Hold Action</th><th>Hold Value</th><th>LED Follow</th><th></th></tr></thead>
     <tbody id='map_rows'></tbody>
   </table>
   <div class='r'><button onclick='addRow()'>Add row</button><button class='d' onclick='clearRows()'>Clear rows</button></div>
@@ -32,10 +32,14 @@ const P=(u,b)=>fetch(u,{method:'POST',headers:{'Content-Type':'application/json'
 const actions=['none','temp_up','temp_down','set_temp','power_on','power_off','toggle_power','mode_heat','mode_cool','mode_fan','mode_auto','mode_off'];
 const needsValue=a=>a==='temp_up'||a==='temp_down'||a==='set_temp';
 let actionMaps=[],units=[];
+let lastLoadedGatewayHost='';
+let gatewayHostDirty=false;
 const E=id=>document.getElementById(id);
 
 function setConn(connected){E('conn_state').textContent='Connection: '+(connected?'connected':'disconnected');}
+function setConnBusy(active){const s=E('conn_spin');if(s)s.style.visibility=active?'visible':'hidden';}
 function actionSelect(value){return `<select class='action'>${actions.map(a=>`<option value='${a}' ${a===value?'selected':''}>${a}</option>`).join('')}</select>`}
+function ledFollowSelect(mode){const v=String(mode==null?0:mode);return `<select class='lfm'><option value='0' ${v==='0'?'selected':''}>Disabled</option><option value='1' ${v==='1'?'selected':''}>On when HVAC on</option><option value='2' ${v==='2'?'selected':''}>On when HVAC off</option></select>`}
 function num(v,d=1){const n=Number(v);return Number.isFinite(n)?n:d}
 function parseKeypadsCsv(text){return Array.from(new Set((text||'').split(',').map(s=>parseInt(s.trim(),10)).filter(n=>Number.isInteger(n)&&n>0)))}
 
@@ -62,6 +66,7 @@ function syncRowValueState(tr){
 }
 
 function addRow(row={}){
+  const ledMode=(row.led_follow_mode!=null?num(row.led_follow_mode,0):((row.led_follow_power?2:0)));
   const tr=document.createElement('tr');
   tr.innerHTML=`<td><input class='num kid' type='number' min='1' value='${num(row.keypad_id,0)||''}'></td>
 <td><input class='num bid' type='number' min='1' value='${num(row.id,0)||''}'></td>
@@ -69,6 +74,7 @@ function addRow(row={}){
 <td><input class='num pval' type='number' step='0.5' value='${num(row.press_value,1)}'></td>
 <td>${actionSelect(row.hold_action||'none').replace("class='action'","class='action hact'")}</td>
 <td><input class='num hval' type='number' step='0.5' value='${num(row.hold_value,1)}'></td>
+<td>${ledFollowSelect(ledMode)}</td>
 <td><button class='d' style='margin:0' onclick='this.closest("tr").remove();refreshPreview()'>Remove</button></td>`;
   tr.querySelector('.pact').onchange=()=>{syncRowValueState(tr);refreshPreview();};
   tr.querySelector('.hact').onchange=()=>{syncRowValueState(tr);refreshPreview();};
@@ -90,7 +96,9 @@ function collectRows(){
       press_action:tr.querySelector('.pact').value||'none',
       press_value:num(tr.querySelector('.pval').value,1),
       hold_action:tr.querySelector('.hact').value||'none',
-      hold_value:num(tr.querySelector('.hval').value,1)
+      hold_value:num(tr.querySelector('.hval').value,1),
+      led_follow_mode:num(tr.querySelector('.lfm').value,0),
+      led_follow_power:(num(tr.querySelector('.lfm').value,0)!==0)
     });
   });
   return rows;
@@ -138,14 +146,23 @@ function loadExampleForUnit(){
   E('keypads_csv').value=String(keypad);
   addRow({keypad_id:keypad,id:1,press_action:'temp_up',press_value:1,hold_action:'none',hold_value:1});
   addRow({keypad_id:keypad,id:2,press_action:'temp_down',press_value:1,hold_action:'none',hold_value:1});
-  addRow({keypad_id:keypad,id:3,press_action:'toggle_power',press_value:1,hold_action:'mode_cool',hold_value:1});
+  addRow({keypad_id:keypad,id:3,press_action:'toggle_power',press_value:1,hold_action:'mode_cool',hold_value:1,led_follow_mode:1});
   addRow({keypad_id:keypad,id:4,press_action:'set_temp',press_value:24,hold_action:'mode_heat',hold_value:1});
   refreshPreview();
 }
 
 async function loadDinplug(){
   const r=await J('/api/dinplug');
-  E('gateway_host').value=r.gateway_host||'';
+  const hostEl=E('gateway_host');
+  const loadedHost=(r.gateway_host||'');
+  const isEditing=document.activeElement===hostEl;
+  if(!gatewayHostDirty && !isEditing){
+    hostEl.value=loadedHost;
+  }
+  if(hostEl.value===loadedHost){
+    gatewayHostDirty=false;
+  }
+  lastLoadedGatewayHost=loadedHost;
   E('auto_connect').checked=!!r.auto_connect;
   setConn(!!r.connected);
   try{const p=JSON.parse(r.actions_json||'[]');actionMaps=Array.isArray(p)?p:[]}catch(_){actionMaps=[]}
@@ -167,16 +184,27 @@ async function saveDinplug(){
   const actionsJson=JSON.stringify(actionMaps);
   if(actionsJson.length>3900){alert('Action mapping JSON is too large for storage. Reduce rows.');return;}
   const r=await P('/api/dinplug/save',{gateway_host:E('gateway_host').value,auto_connect:E('auto_connect').checked,actions_json:actionsJson});
+  if(r.ok){
+    lastLoadedGatewayHost=E('gateway_host').value;
+    gatewayHostDirty=false;
+  }
   alert(r.ok?'Saved':'Save failed');
   setTimeout(loadAll,500);
 }
 
 async function connectNow(){
-  const r=await fetch('/api/dinplug/connect',{method:'POST'});
-  if(!r.ok){alert('Connect request failed');return;}
-  setTimeout(loadAll,1200);
+  const host=E('gateway_host').value.trim();
+  if(!host){alert('Gateway host/IP is required');return;}
+  setConnBusy(true);
+  const r=await fetch('/api/dinplug/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({gateway_host:host})});
+  if(!r.ok){setConnBusy(false);alert('Connect request failed');return;}
+  lastLoadedGatewayHost=host;
+  gatewayHostDirty=false;
+  setTimeout(async()=>{await loadAll();setConnBusy(false);},1200);
 }
 
+E('gateway_host').addEventListener('input',()=>{gatewayHostDirty=(E('gateway_host').value!==lastLoadedGatewayHost);});
 E('unit_select').addEventListener('change',renderUnitMapping);
+setConnBusy(false);
 loadAll();setInterval(loadDinplug,5000);
 </script></div></body></html>

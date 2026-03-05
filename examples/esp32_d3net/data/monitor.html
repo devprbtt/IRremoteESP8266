@@ -4,11 +4,33 @@
 <nav><a href='/'>Home</a><a href='/d3net'>D3Net</a><a href='/config'>Config</a><a href='/rtu'>RTU</a><a href='/dinplug'>DINplug</a><a href='/monitor'>Monitor</a><a href='/firmware'>Firmware</a></nav>
 <h2>Monitor</h2><div class='c'><div class='r'><button id='toggleBtn' class='s' onclick='toggleMon()'>Toggle</button><button onclick='clearMon()'>Clear</button></div><p id='monStatus'>...</p><div class='t' id='term'></div></div>
 <script>
-const J=(u,o)=>fetch(u,o).then(r=>r.json()),P=(u,b)=>fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});let logSeq=0,monEnabled=true;
-function setLabel(){document.getElementById('monStatus').innerText='Monitor: '+(monEnabled?'enabled':'disabled');document.getElementById('toggleBtn').innerText=monEnabled?'Disable':'Enable';}
+const J=(u,o)=>fetch(u,o).then(r=>r.json()),P=(u,b)=>fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
+let logSeq=0,monEnabled=true,pollBusy=false,pollTimer=0,pollDelay=2000,pollFailCount=0;
+function setLabel(extra=''){document.getElementById('monStatus').innerText='Monitor: '+(monEnabled?'enabled':'disabled')+(extra?(' - '+extra):'');document.getElementById('toggleBtn').innerText=monEnabled?'Disable':'Enable';}
+function schedulePoll(ms){if(pollTimer)clearTimeout(pollTimer);pollTimer=setTimeout(pollLogs,ms);}
 async function loadMon(){let s=await J('/api/monitor');monEnabled=!!s.enabled;setLabel();}
 async function toggleMon(){await P('/api/monitor/toggle',{enabled:!monEnabled});await loadMon();}
 async function clearMon(){await fetch('/api/monitor/clear',{method:'POST'});document.getElementById('term').innerText='';logSeq=0;}
-async function pollLogs(){let r=await J(`/api/logs?since=${logSeq}`);logSeq=r.latest||logSeq;let t=document.getElementById('term');for(let ln of r.lines)t.innerText+=ln.text;t.scrollTop=t.scrollHeight;}
-setInterval(pollLogs,2000);loadMon();pollLogs();
+async function pollLogs(){
+  if(pollBusy)return;
+  pollBusy=true;
+  try{
+    let r=await J(`/api/logs?since=${logSeq}`);
+    pollFailCount=0;
+    pollDelay=2000;
+    logSeq=r.latest||logSeq;
+    let t=document.getElementById('term');
+    for(let ln of (r.lines||[]))t.innerText+=ln.text;
+    t.scrollTop=t.scrollHeight;
+    setLabel();
+  }catch(_e){
+    pollFailCount++;
+    pollDelay=Math.min(8000,2000+pollFailCount*1000);
+    setLabel('reconnecting...');
+  }finally{
+    pollBusy=false;
+    schedulePoll(pollDelay);
+  }
+}
+loadMon().catch(()=>{});pollLogs();
 </script></div></body></html>

@@ -11,6 +11,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "lwip/netdb.h"
 #include "lwip/sockets.h"
@@ -41,6 +42,9 @@ typedef struct {
     size_t log_count;
     uint32_t log_seq;
     bool monitor_enabled;
+    SemaphoreHandle_t log_lock;
+    bool unit_power_valid[D3NET_MAX_UNITS];
+    bool unit_power_cache[D3NET_MAX_UNITS];
 } telnet_ctx_t;
 
 static telnet_ctx_t s_telnet = {
@@ -58,6 +62,7 @@ static telnet_ctx_t s_telnet = {
     .log_count = 0,
     .log_seq = 0,
     .monitor_enabled = true,
+    .log_lock = NULL,
 };
 
 static void telnet_broadcast(const char *line, size_t len) {
@@ -90,7 +95,8 @@ void telnet_server_logf(const char *fmt, ...) {
     }
     buf[len++] = '\r';
     buf[len++] = '\n';
-    if (s_telnet.monitor_enabled) {
+    if (s_telnet.monitor_enabled && s_telnet.log_lock != NULL &&
+        xSemaphoreTake(s_telnet.log_lock, pdMS_TO_TICKS(100)) == pdTRUE) {
         s_telnet.log_seq++;
         size_t slot = (s_telnet.log_head + s_telnet.log_count) % (sizeof(s_telnet.logs) / sizeof(s_telnet.logs[0]));
         if (s_telnet.log_count == sizeof(s_telnet.logs) / sizeof(s_telnet.logs[0])) {
@@ -99,16 +105,23 @@ void telnet_server_logf(const char *fmt, ...) {
             s_telnet.log_count++;
         }
         memset(s_telnet.logs[slot].line, 0, sizeof(s_telnet.logs[slot].line));
-        memcpy(s_telnet.logs[slot].line, buf, len < sizeof(s_telnet.logs[slot].line) ? len : sizeof(s_telnet.logs[slot].line) - 1U);
+        memcpy(
+            s_telnet.logs[slot].line,
+            buf,
+            len < sizeof(s_telnet.logs[slot].line) ? len : sizeof(s_telnet.logs[slot].line) - 1U);
         s_telnet.logs[slot].seq = s_telnet.log_seq;
+        xSemaphoreGive(s_telnet.log_lock);
     }
 
     telnet_broadcast(buf, len);
 }
 
 void telnet_server_clear_logs(void) {
-    s_telnet.log_head = 0;
-    s_telnet.log_count = 0;
+    if (s_telnet.log_lock != NULL && xSemaphoreTake(s_telnet.log_lock, pdMS_TO_TICKS(100)) == pdTRUE) {
+        s_telnet.log_head = 0;
+        s_telnet.log_count = 0;
+        xSemaphoreGive(s_telnet.log_lock);
+    }
 }
 
 void telnet_server_set_monitor_enabled(bool enabled) {
@@ -194,6 +207,136 @@ static d3net_fan_dir_t fan_dir_from_text(const char *dir) {
     if (strcasecmp(dir, "p4") == 0) return D3NET_FAN_DIR_P4;
     if (strcasecmp(dir, "stop") == 0) return D3NET_FAN_DIR_STOP;
     return D3NET_FAN_DIR_SWING;
+}
+
+static bool send_dinplug_command(const char *cmd) {
+    if (cmd == NULL || cmd[0] == '\0' || !s_telnet.dinplug_connected || s_telnet.dinplug_fd < 0) {
+        return false;
+    }
+    send(s_telnet.dinplug_fd, cmd, strlen(cmd), 0);
+    send(s_telnet.dinplug_fd, "\r\n", 2, 0);
+    telnet_server_logf("dinplug tx: %s", cmd);
+    return true;
+}
+
+static bool set_dinplug_led(uint16_t keypad_id, uint16_t led_id, uint8_t state) {
+    if (keypad_id == 0 || led_id == 0 || state > 3U) {
+        return false;
+    }
+    char cmd[48];
+    snprintf(cmd, sizeof(cmd), "LED %u %u %u", (unsigned)keypad_id, (unsigned)led_id, (unsigned)state);
+    return send_dinplug_command(cmd);
+}
+
+static uint8_t led_follow_mode_from_binding(cJSON *binding) {
+    if (binding == NULL || !cJSON_IsObject(binding)) {
+        return 0;
+    }
+    cJSON *mode = cJSON_GetObjectItem(binding, "led_follow_mode");
+    if (cJSON_IsNumber(mode)) {
+        int m = mode->valueint;
+        if (m >= 0 && m <= 2) {
+            return (uint8_t)m;
+        }
+        return 0;
+    }
+    // Backward compatibility with old boolean field.
+    cJSON *legacy = cJSON_GetObjectItem(binding, "led_follow_power");
+    if (cJSON_IsTrue(legacy)) {
+        return 2;
+    }
+    return 0;
+}
+
+static void sync_leds_for_unit_entry(cJSON *entry, uint16_t unit_index, bool power_on) {
+    if (!cJSON_IsObject(entry)) {
+        return;
+    }
+    cJSON *idx = cJSON_GetObjectItem(entry, "unit_index");
+    if (!cJSON_IsNumber(idx) || idx->valueint != (int)unit_index) {
+        return;
+    }
+
+    cJSON *keypads = cJSON_GetObjectItem(entry, "keypads");
+    cJSON *buttons = cJSON_GetObjectItem(entry, "buttons");
+    if (!cJSON_IsArray(buttons)) {
+        return;
+    }
+
+    cJSON *b = NULL;
+    cJSON_ArrayForEach(b, buttons) {
+        if (!cJSON_IsObject(b)) {
+            continue;
+        }
+        cJSON *kid = cJSON_GetObjectItem(b, "keypad_id");
+        cJSON *bid = cJSON_GetObjectItem(b, "id");
+        if (!cJSON_IsNumber(bid) || bid->valueint <= 0) {
+            continue;
+        }
+        uint8_t mode = led_follow_mode_from_binding(b);
+        if (mode == 0) {
+            continue;
+        }
+        const uint8_t led_state = (mode == 1) ? (power_on ? 1U : 0U) : (power_on ? 0U : 1U);
+        if (cJSON_IsNumber(kid) && kid->valueint > 0) {
+            set_dinplug_led((uint16_t)kid->valueint, (uint16_t)bid->valueint, led_state);
+            continue;
+        }
+        if (!cJSON_IsArray(keypads)) {
+            continue;
+        }
+        cJSON *k = NULL;
+        cJSON_ArrayForEach(k, keypads) {
+            if (cJSON_IsNumber(k) && k->valueint > 0) {
+                set_dinplug_led((uint16_t)k->valueint, (uint16_t)bid->valueint, led_state);
+            }
+        }
+    }
+}
+
+static void sync_leds_for_unit_index_locked(uint16_t unit_index) {
+    if (s_telnet.app == NULL || !s_telnet.dinplug_connected || s_telnet.app->config.din_actions_json[0] == '\0') {
+        return;
+    }
+    d3net_unit_t *u = find_unit_by_index((int)unit_index);
+    if (u == NULL) {
+        return;
+    }
+    const bool power_on = d3net_status_power_get(&u->status);
+    cJSON *maps = cJSON_Parse(s_telnet.app->config.din_actions_json);
+    if (maps == NULL || !cJSON_IsArray(maps)) {
+        cJSON_Delete(maps);
+        return;
+    }
+    cJSON *entry = NULL;
+    cJSON_ArrayForEach(entry, maps) {
+        sync_leds_for_unit_entry(entry, unit_index, power_on);
+    }
+    cJSON_Delete(maps);
+}
+
+static void sync_leds_for_all_units_locked(void) {
+    if (s_telnet.app == NULL || !s_telnet.dinplug_connected || s_telnet.app->config.din_actions_json[0] == '\0') {
+        return;
+    }
+    cJSON *maps = cJSON_Parse(s_telnet.app->config.din_actions_json);
+    if (maps == NULL || !cJSON_IsArray(maps)) {
+        cJSON_Delete(maps);
+        return;
+    }
+    cJSON *entry = NULL;
+    cJSON_ArrayForEach(entry, maps) {
+        cJSON *idx = cJSON_GetObjectItem(entry, "unit_index");
+        if (!cJSON_IsNumber(idx) || idx->valueint < 0 || idx->valueint >= D3NET_MAX_UNITS) {
+            continue;
+        }
+        d3net_unit_t *u = find_unit_by_index(idx->valueint);
+        if (u == NULL) {
+            continue;
+        }
+        sync_leds_for_unit_entry(entry, (uint16_t)idx->valueint, d3net_status_power_get(&u->status));
+    }
+    cJSON_Delete(maps);
 }
 
 static esp_err_t apply_action_to_unit(d3net_unit_t *u, const char *action, float value) {
@@ -325,6 +468,12 @@ static void process_telnet_json(int fd, const char *line) {
 
 size_t telnet_server_get_logs(uint32_t since_seq, telnet_log_line_t *out, size_t max_lines) {
     size_t written = 0;
+    if (s_telnet.log_lock == NULL) {
+        return 0;
+    }
+    if (xSemaphoreTake(s_telnet.log_lock, pdMS_TO_TICKS(200)) != pdTRUE) {
+        return 0;
+    }
     for (size_t i = 0; i < s_telnet.log_count && written < max_lines; i++) {
         size_t idx = (s_telnet.log_head + i) % (sizeof(s_telnet.logs) / sizeof(s_telnet.logs[0]));
         if (s_telnet.logs[idx].seq <= since_seq) {
@@ -335,6 +484,7 @@ size_t telnet_server_get_logs(uint32_t since_seq, telnet_log_line_t *out, size_t
         out[written].seq = s_telnet.logs[idx].seq;
         written++;
     }
+    xSemaphoreGive(s_telnet.log_lock);
     return written;
 }
 
@@ -347,15 +497,22 @@ static void telnet_status_task(void *arg) {
                 for (uint8_t i = 0; i < D3NET_MAX_UNITS; i++) {
                     d3net_unit_t *u = &s_telnet.app->gateway.units[i];
                     if (!u->present) {
+                        s_telnet.unit_power_valid[i] = false;
                         continue;
                     }
+                    const bool power = d3net_status_power_get(&u->status);
                     telnet_server_logf(
                         "%s pwr=%d mode=%d set=%.1f cur=%.1f",
                         u->unit_id,
-                        d3net_status_power_get(&u->status),
+                        power,
                         d3net_status_oper_mode_get(&u->status),
                         d3net_status_temp_setpoint_get(&u->status),
                         d3net_status_temp_current_get(&u->status));
+                    if (!s_telnet.unit_power_valid[i] || s_telnet.unit_power_cache[i] != power) {
+                        s_telnet.unit_power_valid[i] = true;
+                        s_telnet.unit_power_cache[i] = power;
+                        sync_leds_for_unit_index_locked(i);
+                    }
                 }
                 xSemaphoreGive(s_telnet.app->gateway_lock);
             }
@@ -482,6 +639,11 @@ static void process_dinplug_button_event(uint16_t keypad_id, uint16_t button_id,
                                (unsigned)button_id,
                                action,
                                esp_err_to_name(err));
+            if (err == ESP_OK) {
+                s_telnet.unit_power_valid[u->index] = true;
+                s_telnet.unit_power_cache[u->index] = d3net_status_power_get(&u->status);
+                sync_leds_for_unit_entry(entry, u->index, s_telnet.unit_power_cache[u->index]);
+            }
         }
     }
 
@@ -542,6 +704,10 @@ static void dinplug_task(void *arg) {
                         s_telnet.dinplug_buf_len = 0;
                         s_telnet.dinplug_last_keepalive_ms = now_ms;
                         telnet_server_logf("dinplug connected to %s:%u", host, DINPLUG_PORT);
+                        if (xSemaphoreTake(s_telnet.app->gateway_lock, pdMS_TO_TICKS(1000)) == pdTRUE) {
+                            sync_leds_for_all_units_locked();
+                            xSemaphoreGive(s_telnet.app->gateway_lock);
+                        }
                     } else {
                         close(fd);
                     }
@@ -625,6 +791,9 @@ esp_err_t telnet_server_start(app_context_t *app) {
     }
     s_telnet.app = app;
     s_telnet.listen_port = (app->config.telnet_port == 0U) ? 23U : app->config.telnet_port;
+    if (s_telnet.log_lock == NULL) {
+        s_telnet.log_lock = xSemaphoreCreateMutex();
+    }
     xTaskCreate(telnet_accept_task, "telnet_accept", 4096, NULL, 5, NULL);
     xTaskCreate(telnet_rx_task, "telnet_rx", 6144, NULL, 5, NULL);
     xTaskCreate(telnet_status_task, "telnet_status", 4096, NULL, 4, NULL);

@@ -1,0 +1,13 @@
+# Target labels
+ bootloader
+# Source files and their labels
+I:/irhvactelnet/IRremoteESP8266/examples/esp32_d3net/build/CMakeFiles/bootloader
+I:/irhvactelnet/IRremoteESP8266/examples/esp32_d3net/build/CMakeFiles/bootloader.rule
+I:/irhvactelnet/IRremoteESP8266/examples/esp32_d3net/build/CMakeFiles/bootloader-complete.rule
+I:/irhvactelnet/IRremoteESP8266/examples/esp32_d3net/build/bootloader-prefix/src/bootloader-stamp/bootloader-build.rule
+I:/irhvactelnet/IRremoteESP8266/examples/esp32_d3net/build/bootloader-prefix/src/bootloader-stamp/bootloader-configure.rule
+I:/irhvactelnet/IRremoteESP8266/examples/esp32_d3net/build/bootloader-prefix/src/bootloader-stamp/bootloader-download.rule
+I:/irhvactelnet/IRremoteESP8266/examples/esp32_d3net/build/bootloader-prefix/src/bootloader-stamp/bootloader-install.rule
+I:/irhvactelnet/IRremoteESP8266/examples/esp32_d3net/build/bootloader-prefix/src/bootloader-stamp/bootloader-mkdir.rule
+I:/irhvactelnet/IRremoteESP8266/examples/esp32_d3net/build/bootloader-prefix/src/bootloader-stamp/bootloader-patch.rule
+I:/irhvactelnet/IRremoteESP8266/examples/esp32_d3net/build/bootloader-prefix/src/bootloader-stamp/bootloader-update.rule
