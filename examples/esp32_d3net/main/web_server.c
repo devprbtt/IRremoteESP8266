@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 #include "cJSON.h"
 #include "config_store.h"
@@ -53,6 +54,29 @@ static void reg_set(app_context_t *app, uint8_t index, bool on, const char *unit
     } else {
         app->config.registered_mask &= ~(1ULL << index);
         memset(app->config.registered_ids[index], 0, sizeof(app->config.registered_ids[index]));
+    }
+}
+
+static const char *mode_name(d3net_mode_t mode) {
+    switch (mode) {
+    case D3NET_MODE_FAN:
+        return "fan";
+    case D3NET_MODE_HEAT:
+        return "heat";
+    case D3NET_MODE_COOL:
+        return "cool";
+    case D3NET_MODE_AUTO:
+        return "auto";
+    case D3NET_MODE_VENT:
+        return "vent";
+    case D3NET_MODE_UNDEFINED:
+        return "undefined";
+    case D3NET_MODE_SLAVE:
+        return "slave";
+    case D3NET_MODE_DRY:
+        return "dry";
+    default:
+        return "unknown";
     }
 }
 
@@ -609,8 +633,11 @@ static esp_err_t handle_registry_get(httpd_req_t *req) {
             cJSON_AddBoolToObject(item, "power", d3net_status_power_get(&u->status));
             int mode = d3net_status_oper_mode_get(&u->status);
             cJSON_AddNumberToObject(item, "mode", mode);
-            cJSON_AddStringToObject(item, "mode_name", "");
-            cJSON_AddNumberToObject(item, "temp_current", d3net_status_temp_current_get(&u->status));
+            cJSON_AddStringToObject(item, "mode_name", mode_name((d3net_mode_t)mode));
+
+            float temp_current = d3net_status_temp_current_get(&u->status);
+            temp_current = roundf(temp_current * 100.0f) / 100.0f;
+            cJSON_AddNumberToObject(item, "temp_current", temp_current);
             cJSON_AddNumberToObject(item, "temp_setpoint", d3net_status_temp_setpoint_get(&u->status));
             cJSON_AddItemToArray(arr, item);
         }
