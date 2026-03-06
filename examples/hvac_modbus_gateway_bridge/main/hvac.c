@@ -11,6 +11,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "telnet_server.h"
 
 #define HVAC_TASK_STACK 6144
 #define HVAC_TASK_PRIO 6
@@ -485,6 +486,11 @@ static void poll_task_fn(void *arg)
                          mgr->zones[idx].central_address,
                          mgr->zones[idx].slave_id,
                          err);
+                telnet_server_logf("poll zone idx=%u ca=%u slave=%u failed: 0x%x",
+                                   (unsigned)idx,
+                                   mgr->zones[idx].central_address,
+                                   mgr->zones[idx].slave_id,
+                                   err);
             }
             xSemaphoreGive(mgr->lock);
         }
@@ -595,6 +601,13 @@ esp_err_t hvac_manager_set_field(hvac_manager_t *mgr, size_t zone_index, const c
         return ESP_ERR_TIMEOUT;
     }
 
+    if (!z->connected) {
+        snprintf(msg, msg_len, "zone offline");
+        telnet_server_logf("set zone=%u rejected=offline", (unsigned)zone_index);
+        xSemaphoreGive(mgr->lock);
+        return ESP_ERR_INVALID_STATE;
+    }
+
     if (strcasecmp(field, "power") == 0) {
         long v = strtol(value, NULL, 10);
         bool b = (v != 0);
@@ -607,6 +620,8 @@ esp_err_t hvac_manager_set_field(hvac_manager_t *mgr, size_t zone_index, const c
         long v = strtol(value, NULL, 10);
         if (v < 0 || v > 4) {
             err = ESP_ERR_INVALID_ARG;
+        } else if (mgr->cfg.hvac.gateway_type == HVAC_GATEWAY_MIDEA_GW3_MOD && v == 3) {
+            err = ESP_ERR_NOT_SUPPORTED;
         } else {
             uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000);
             uint64_t elapsed = now_ms - mgr->last_mode_write_ms[zone_index];
@@ -653,10 +668,28 @@ esp_err_t hvac_manager_set_field(hvac_manager_t *mgr, size_t zone_index, const c
     if (err == ESP_OK) {
         refresh_one(mgr, zone_index);
         snprintf(msg, msg_len, "ok");
+        telnet_server_logf("set zone=%u field=%s value=%s result=ok",
+                           (unsigned)zone_index,
+                           field,
+                           value);
+    } else if (err == ESP_ERR_NOT_SUPPORTED) {
+        snprintf(msg, msg_len, "value not supported for gateway");
+        telnet_server_logf("set zone=%u field=%s value=%s rejected=not_supported",
+                           (unsigned)zone_index,
+                           field,
+                           value);
     } else if (err == ESP_ERR_INVALID_STATE) {
         snprintf(msg, msg_len, "mode rate-limited");
+        telnet_server_logf("set zone=%u field=%s blocked=rate_limited",
+                           (unsigned)zone_index,
+                           field);
     } else {
         snprintf(msg, msg_len, "write failed: 0x%x", err);
+        telnet_server_logf("set zone=%u field=%s value=%s failed=0x%x",
+                           (unsigned)zone_index,
+                           field,
+                           value,
+                           err);
     }
 
     xSemaphoreGive(mgr->lock);

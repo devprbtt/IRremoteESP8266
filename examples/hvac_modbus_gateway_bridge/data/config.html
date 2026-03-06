@@ -1,2 +1,296 @@
-<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><style>body{font-family:Arial,sans-serif;margin:0;background:#101319;color:#e6edf3}.wrap{max-width:980px;margin:0 auto;padding:14px}.c{background:#171b22;border:1px solid #293042;border-radius:8px;padding:10px;margin:10px 0}nav{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px}a{color:#101319;background:#d0d7de;padding:6px 9px;border-radius:6px;text-decoration:none;font-weight:600}input,select,button{width:100%;box-sizing:border-box;margin:4px 0;padding:7px;border-radius:6px;border:1px solid #3a4458;background:#0f141b;color:#e6edf3}button{cursor:pointer;background:#2ea043;border:0;color:#fff;font-weight:600}button.s{background:#1f6feb}.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}pre{white-space:pre-wrap;word-break:break-word;background:#0f141b;border:1px solid #3a4458;padding:8px;border-radius:6px}</style></head><body><div class='wrap'><nav><a href='/'>Home</a><a href='/config'>Config</a><a href='/monitor'>Monitor</a></nav><h2>Config</h2><div class='c'><input id='ssid' placeholder='SSID'><input id='password' placeholder='Password' type='password'><div class='grid'><input id='zones' placeholder='Zones CSV: 1:0,1:1,1:2'><input id='idu_address_base' type='number' min='0' max='1' placeholder='IDU base'></div><div class='grid'><select id='gateway_type'><option value='lg_pmbusb00a'>LG PMBUSB00A</option><option value='midea_gw3_mod'>Midea GW3-MOD</option><option value='daikin_dta116a51'>Daikin DTA116A51</option></select><input id='device_id' placeholder='Device ID'></div><div class='grid'><input id='poll_interval_ms' type='number' placeholder='Poll interval ms'><input id='default_slave_id' type='number' min='1' max='247' placeholder='Default slave'></div><div class='grid'><input id='tx_pin' type='number' placeholder='TX pin'><input id='rx_pin' type='number' placeholder='RX pin'></div><div class='grid'><input id='de_pin' type='number' placeholder='DE pin'><input id='baud' type='number' placeholder='Baud'></div><div class='grid'><input id='timeout_ms' type='number' placeholder='Timeout ms'><input id='retries' type='number' placeholder='Retries'></div><div class='grid'><input id='setpoint_min_tenths' type='number' placeholder='Setpoint min (tenths)'><input id='setpoint_max_tenths' type='number' placeholder='Setpoint max (tenths)'></div><div class='grid'><input id='mode_rate_limit_ms' type='number' placeholder='Mode rate-limit ms'><input id='log_level' type='number' placeholder='Log level'></div><button class='s' onclick='scanWifi()'>Scan Wi-Fi</button><pre id='scan'>[]</pre><button onclick='saveConfig()'>Save Config and Reboot</button><pre id='status'>Ready</pre></div><script>const J=(u,o)=>fetch(u,o).then(r=>r.json());const P=(u,b)=>fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).then(r=>r.json());async function loadConfig(){  const c=await J('/api/config');  ssid.value=c.wifi.ssid||'';password.value='';  zones.value=(c.hvac.zones||[]).map(z=>`${z.slave}:${z.central_address}`).join(',');  idu_address_base.value=c.hvac.idu_address_base;  gateway_type.value=c.hvac.gateway_type||'lg_pmbusb00a';  device_id.value=c.device_id||'hvac-modbus-gateway-bridge';  poll_interval_ms.value=c.hvac.poll_interval_ms;  default_slave_id.value=c.modbus.default_slave;  tx_pin.value=c.modbus.tx;rx_pin.value=c.modbus.rx;de_pin.value=c.modbus.de;  baud.value=c.modbus.baud;timeout_ms.value=c.modbus.timeout_ms;retries.value=c.modbus.retries;  setpoint_min_tenths.value=c.hvac.setpoint_min_tenths;setpoint_max_tenths.value=c.hvac.setpoint_max_tenths;  mode_rate_limit_ms.value=c.hvac.mode_rate_limit_ms;log_level.value=c.log_level;}async function scanWifi(){  const s=await J('/api/wifi/scan');  scan.textContent=JSON.stringify(s.items||[],null,2);}async function saveConfig(){  const body={    ssid:ssid.value,password:password.value,zones:zones.value,    gateway_type:gateway_type.value,device_id:device_id.value,    idu_address_base:+idu_address_base.value,poll_interval_ms:+poll_interval_ms.value,default_slave_id:+default_slave_id.value,    tx_pin:+tx_pin.value,rx_pin:+rx_pin.value,de_pin:+de_pin.value,baud:+baud.value,timeout_ms:+timeout_ms.value,retries:+retries.value,    setpoint_min_tenths:+setpoint_min_tenths.value,setpoint_max_tenths:+setpoint_max_tenths.value,    mode_rate_limit_ms:+mode_rate_limit_ms.value,log_level:+log_level.value  };  const r=await P('/api/config/save',body);  status.textContent=JSON.stringify(r,null,2);}loadConfig();</script></div></body></html>
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>HVAC Gateway Config</title>
+  <style>
+    :root { --bg:#101319; --panel:#171b22; --line:#2b3344; --text:#e6edf3; --muted:#9fb1c7; --ok:#2ea043; --alt:#1f6feb; }
+    body { margin:0; font-family:Arial,sans-serif; background:var(--bg); color:var(--text); }
+    .wrap { max-width:1050px; margin:0 auto; padding:14px; }
+    nav { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; }
+    a { color:#101319; background:#d0d7de; padding:6px 9px; border-radius:6px; text-decoration:none; font-weight:600; }
+    .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px; margin:10px 0; }
+    h2 { margin:6px 0 10px; }
+    h3 { margin:4px 0 10px; color:var(--muted); font-size:15px; font-weight:700; }
+    .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+    .field { display:flex; flex-direction:column; gap:4px; }
+    .field label { font-size:12px; color:var(--muted); font-weight:700; letter-spacing:.2px; }
+    input, select, button {
+      width:100%; box-sizing:border-box; padding:8px; border-radius:7px;
+      border:1px solid #3a4458; background:#0f141b; color:var(--text);
+    }
+    button { cursor:pointer; border:0; font-weight:700; background:var(--ok); color:#fff; }
+    button.alt { background:var(--alt); }
+    button:disabled { opacity:.65; cursor:not-allowed; }
+    .scan-row { display:grid; grid-template-columns:1fr auto; gap:10px; align-items:end; }
+    .scan-status { display:flex; gap:8px; align-items:center; margin-top:8px; font-size:12px; color:var(--muted); }
+    .hint { font-size:12px; color:var(--muted); margin-top:4px; }
+    .spin { width:13px; height:13px; border:2px solid #3a4458; border-top-color:var(--alt); border-radius:50%; visibility:hidden; animation:sp .8s linear infinite; }
+    @keyframes sp { to { transform:rotate(360deg); } }
+    pre { margin:0; white-space:pre-wrap; word-break:break-word; background:#0f141b; border:1px solid #3a4458; padding:8px; border-radius:7px; }
+    @media (max-width: 860px) { .grid2 { grid-template-columns:1fr; } .scan-row { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <nav><a href="/">Home</a><a href="/config">Config</a><a href="/monitor">Monitor</a><a href="/firmware">Firmware</a></nav>
+    <h2>Gateway Configuration</h2>
 
+    <div class="card">
+      <h3>Wi-Fi</h3>
+      <div class="scan-row">
+        <div class="field">
+          <label for="ssid_select">Available Networks</label>
+          <select id="ssid_select" onchange="onSsidPick()">
+            <option value="">Scan to list APs</option>
+          </select>
+        </div>
+        <button id="scanBtn" class="alt" type="button" onclick="scanWifi()">Scan Wi-Fi</button>
+      </div>
+      <div class="scan-status"><span id="scanSpin" class="spin"></span><span id="scanStatus">Idle</span></div>
+
+      <div class="grid2">
+        <div class="field"><label for="ssid">SSID</label><input id="ssid" placeholder="Your Wi-Fi SSID"></div>
+        <div class="field"><label for="password">Password</label><input id="password" type="password" placeholder="Wi-Fi password"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>System + HVAC</h3>
+      <div class="grid2">
+        <div class="field"><label for="device_id">Device ID</label><input id="device_id" placeholder="hvac-modbus-gateway-bridge"></div>
+        <div class="field"><label for="gateway_type">Gateway Type</label>
+          <select id="gateway_type">
+            <option value="lg_pmbusb00a">LG PMBUSB00A</option>
+            <option value="midea_gw3_mod">Midea GW3-MOD</option>
+            <option value="daikin_dta116a51">Daikin DTA116A51</option>
+          </select>
+          <div id="gateway_hint" class="hint"></div>
+        </div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label for="zones">Zones CSV</label><input id="zones" placeholder="1:0,1:1,1:2"></div>
+        <div class="field"><label for="idu_address_base">IDU Address Base (0 or 1)</label><input id="idu_address_base" type="number" min="0" max="1"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label for="poll_interval_ms">Poll Interval (ms)</label><input id="poll_interval_ms" type="number"></div>
+        <div class="field"><label for="mode_rate_limit_ms">Mode Rate Limit (ms)</label><input id="mode_rate_limit_ms" type="number"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label for="setpoint_min_tenths">Setpoint Min (x10 C)</label><input id="setpoint_min_tenths" type="number"></div>
+        <div class="field"><label for="setpoint_max_tenths">Setpoint Max (x10 C)</label><input id="setpoint_max_tenths" type="number"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label for="log_level">Log Level</label><input id="log_level" type="number"></div>
+        <div class="field"><label for="default_slave_id">Default Modbus Slave</label><input id="default_slave_id" type="number" min="1" max="247"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Modbus / RS-485</h3>
+      <div class="grid2">
+        <div class="field"><label for="tx_pin">TX Pin</label><input id="tx_pin" type="number"></div>
+        <div class="field"><label for="rx_pin">RX Pin</label><input id="rx_pin" type="number"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label for="de_pin">DE Pin</label><input id="de_pin" type="number"></div>
+        <div class="field"><label for="baud">Baud Rate</label><input id="baud" type="number"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label for="timeout_ms">Timeout (ms)</label><input id="timeout_ms" type="number"></div>
+        <div class="field"><label for="retries">Retries</label><input id="retries" type="number"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>OTA</h3>
+      <div class="grid2">
+        <div class="field"><label for="ota_firmware_url">Firmware URL</label><input id="ota_firmware_url" placeholder="https://host/firmware.bin"></div>
+        <div class="field"><label for="ota_filesystem_url">Filesystem URL</label><input id="ota_filesystem_url" placeholder="https://host/spiffs.bin"></div>
+      </div>
+      <div class="grid2">
+        <button type="button" class="alt" onclick="startOta('firmware')">Start Firmware OTA</button>
+        <button type="button" class="alt" onclick="startOta('filesystem')">Start Filesystem OTA</button>
+      </div>
+      <pre id="ota_status">OTA idle</pre>
+    </div>
+
+    <div class="card">
+      <button type="button" onclick="saveConfig()">Save Config and Reboot</button>
+      <pre id="status">Ready</pre>
+    </div>
+  </div>
+
+  <script>
+    const J = (u, o) => fetch(u, o).then((r) => r.json());
+    const P = (u, b) => fetch(u, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(b)
+    }).then((r) => r.json());
+    const GW = {
+      lg_pmbusb00a: {
+        iduBase: 0,
+        spMin: 160,
+        spMax: 300,
+        zonesPlaceholder: "1:0,1:1,1:2",
+        hint: "LG: IDU base can be 0 or 1 depending on site setup."
+      },
+      midea_gw3_mod: {
+        iduBase: 0,
+        spMin: 160,
+        spMax: 300,
+        zonesPlaceholder: "1:0,1:1,1:2",
+        hint: "Midea: IDU base fixed to 0 in this firmware profile."
+      },
+      daikin_dta116a51: {
+        iduBase: 0,
+        spMin: 160,
+        spMax: 300,
+        zonesPlaceholder: "1:0,1:1,1:2",
+        hint: "Daikin DTA116A51 (d3net map): IDU base fixed to 0."
+      }
+    };
+
+    function setScanState(active, msg) {
+      const spin = document.getElementById("scanSpin");
+      const btn = document.getElementById("scanBtn");
+      const st = document.getElementById("scanStatus");
+      spin.style.visibility = active ? "visible" : "hidden";
+      btn.disabled = active;
+      st.textContent = msg;
+    }
+
+    function onSsidPick() {
+      const sel = document.getElementById("ssid_select");
+      if (sel.value) {
+        document.getElementById("ssid").value = sel.value;
+      }
+    }
+
+    function applyGatewayProfile(gw, hardApply) {
+      const p = GW[gw] || GW.lg_pmbusb00a;
+      gateway_hint.textContent = p.hint;
+      zones.placeholder = p.zonesPlaceholder;
+      if (hardApply) {
+        idu_address_base.value = p.iduBase;
+        setpoint_min_tenths.value = p.spMin;
+        setpoint_max_tenths.value = p.spMax;
+      }
+    }
+
+    async function loadConfig() {
+      const c = await J("/api/config");
+      ssid.value = c.wifi.ssid || "";
+      password.value = "";
+      zones.value = (c.hvac.zones || []).map((z) => `${z.slave}:${z.central_address}`).join(",");
+      idu_address_base.value = c.hvac.idu_address_base;
+      gateway_type.value = c.hvac.gateway_type || "lg_pmbusb00a";
+      device_id.value = c.device_id || "hvac-modbus-gateway-bridge";
+      poll_interval_ms.value = c.hvac.poll_interval_ms;
+      default_slave_id.value = c.modbus.default_slave;
+      tx_pin.value = c.modbus.tx;
+      rx_pin.value = c.modbus.rx;
+      de_pin.value = c.modbus.de;
+      baud.value = c.modbus.baud;
+      timeout_ms.value = c.modbus.timeout_ms;
+      retries.value = c.modbus.retries;
+      setpoint_min_tenths.value = c.hvac.setpoint_min_tenths;
+      setpoint_max_tenths.value = c.hvac.setpoint_max_tenths;
+      mode_rate_limit_ms.value = c.hvac.mode_rate_limit_ms;
+      log_level.value = c.log_level;
+      ota_firmware_url.value = (c.ota && c.ota.firmware_url) || "";
+      ota_filesystem_url.value = (c.ota && c.ota.filesystem_url) || "";
+      applyGatewayProfile(gateway_type.value, false);
+      refreshOtaStatus();
+    }
+
+    async function scanWifi() {
+      setScanState(true, "Scanning Wi-Fi networks...");
+      try {
+        const ac = new AbortController();
+        const t = setTimeout(() => ac.abort(), 14000);
+        const r = await fetch("/api/wifi/scan", { signal: ac.signal }).then((x) => x.json());
+        clearTimeout(t);
+        const list = (r && (r.items || r.networks)) || [];
+        const s = document.getElementById("ssid_select");
+        s.innerHTML = "";
+        const first = document.createElement("option");
+        first.value = "";
+        first.text = list.length ? "Select SSID" : "No AP found";
+        s.appendChild(first);
+
+        for (const ap of list) {
+          const o = document.createElement("option");
+          o.value = ap.ssid || "";
+          o.text = `${ap.ssid || "<hidden>"} (${ap.rssi})`;
+          s.appendChild(o);
+        }
+        const ok = r && (r.ok === undefined || r.ok === true);
+        if (ok) {
+          setScanState(false, `Scan complete: ${list.length} AP(s)`);
+        } else {
+          const info = r.err_name ? ` (${r.err_name})` : "";
+          setScanState(false, `Scan failed${info}`);
+        }
+      } catch (e) {
+        setScanState(false, e && e.name === "AbortError" ? "Scan timed out" : "Scan failed");
+      }
+    }
+
+    async function saveConfig() {
+      const body = {
+        ssid: ssid.value,
+        password: password.value,
+        zones: zones.value,
+        gateway_type: gateway_type.value,
+        device_id: device_id.value,
+        idu_address_base: +idu_address_base.value,
+        poll_interval_ms: +poll_interval_ms.value,
+        default_slave_id: +default_slave_id.value,
+        tx_pin: +tx_pin.value,
+        rx_pin: +rx_pin.value,
+        de_pin: +de_pin.value,
+        baud: +baud.value,
+        timeout_ms: +timeout_ms.value,
+        retries: +retries.value,
+        setpoint_min_tenths: +setpoint_min_tenths.value,
+        setpoint_max_tenths: +setpoint_max_tenths.value,
+        mode_rate_limit_ms: +mode_rate_limit_ms.value,
+        log_level: +log_level.value,
+        ota_firmware_url: ota_firmware_url.value.trim(),
+        ota_filesystem_url: ota_filesystem_url.value.trim()
+      };
+      const r = await P("/api/config/save", body);
+      status.textContent = JSON.stringify(r, null, 2);
+    }
+
+    async function refreshOtaStatus() {
+      try {
+        const s = await J("/api/ota/status");
+        ota_status.textContent = JSON.stringify(s, null, 2);
+      } catch (_e) {
+        ota_status.textContent = "Failed to fetch OTA status";
+      }
+    }
+
+    async function startOta(type) {
+      const body = { type: type };
+      if (type === "firmware") {
+        body.url = ota_firmware_url.value.trim();
+      } else {
+        body.url = ota_filesystem_url.value.trim();
+      }
+      const r = await P("/api/ota/start", body);
+      ota_status.textContent = JSON.stringify(r, null, 2);
+      setTimeout(refreshOtaStatus, 500);
+    }
+
+    loadConfig();
+    gateway_type.addEventListener("change", () => applyGatewayProfile(gateway_type.value, true));
+    setScanState(false, "Idle");
+    setInterval(refreshOtaStatus, 2000);
+  </script>
+</body>
+</html>

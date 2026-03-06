@@ -6,6 +6,7 @@
 #include "nvs_flash.h"
 #include "hvac.h"
 #include "modbus_client.h"
+#include "ota_manager.h"
 #include "telnet_server.h"
 #include "wifi_manager.h"
 #include "web_server.h"
@@ -62,10 +63,17 @@ void app_main(void)
     ESP_ERROR_CHECK(telnet_server_start(&telnet, &tel_cfg));
 
     web_server_t *web = NULL;
+    ota_manager_t *ota = NULL;
+    ota_manager_config_t ota_cfg = {
+        .cfg = &cfg,
+    };
+    ESP_ERROR_CHECK(ota_manager_init(&ota, &ota_cfg));
+
     web_server_config_t web_cfg = {
         .cfg = &cfg,
         .hvac = hvac,
         .wifi = wifi,
+        .ota = ota,
     };
     ESP_ERROR_CHECK(web_server_start(&web, &web_cfg));
 

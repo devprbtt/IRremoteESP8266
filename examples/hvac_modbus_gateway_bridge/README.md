@@ -7,6 +7,7 @@ Production-oriented ESP32 firmware that:
 - Exposes a d3net-style web interface and JSON API for monitoring/configuration.
 - Persists runtime configuration in NVS.
 - Supports Wi-Fi STA and fallback SoftAP provisioning web page.
+- Supports OTA for both firmware app partition and SPIFFS filesystem partition.
 
 ## Features
 
@@ -132,6 +133,7 @@ Ways to set:
 - `GET /` Home dashboard (network/system/zones)
 - `GET /config` Wi-Fi + Modbus + HVAC configuration
 - `GET /monitor` zone monitor and command panel
+- `GET /firmware` OTA page (d3net-style progress bars and upload actions)
 
 Pages are served from SPIFFS (`data/*.html`) similar to the d3net pattern.
 
@@ -142,8 +144,13 @@ Pages are served from SPIFFS (`data/*.html`) similar to the d3net pattern.
 - `POST /api/config/save`
 - `GET /api/wifi/scan`
 - `GET /api/zones`
+- `GET /api/hvac/meta` (gateway-specific writable schema + online zones)
 - `POST /api/hvac/cmd`
 - `POST /api/hvac/read`
+- `GET /api/ota/status`
+- `POST /api/ota/start`
+- `POST /firmware/update` (raw firmware `.bin` upload)
+- `POST /spiffs/update` (raw `spiffs.bin` upload)
 
 Example HVAC command payload:
 
@@ -181,6 +188,38 @@ SET 0 fan 3
 SET 0 setpoint 23.5
 GET 0
 ```
+
+## OTA (Firmware + Filesystem)
+
+OTA URLs are stored in config:
+- `ota.firmware_url`
+- `ota.filesystem_url`
+
+You can start OTA from the web config page or API:
+
+```json
+POST /api/ota/start
+{"type":"firmware","url":"https://host/fw.bin"}
+```
+
+```json
+POST /api/ota/start
+{"type":"filesystem","url":"https://host/spiffs.bin"}
+```
+
+Status:
+
+```json
+GET /api/ota/status
+```
+
+On successful OTA, device schedules automatic reboot.
+
+For filesystem OTA, the image must be a SPIFFS binary sized for the `spiffs` partition in `partitions.csv`.
+
+Direct browser upload OTA is also available from `/firmware`:
+- Upload firmware `.bin` with client-side progress bar
+- Upload `spiffs.bin` with client-side progress bar
 
 ## Register Model and Addressing
 
@@ -241,7 +280,6 @@ Firmware behavior for Midea writes:
 
 ## Notes
 
-- OTA is not enabled yet. Add HTTPS OTA flow using `esp_https_ota` and `ota_url` from config.
 - Optional serial CLI can be added later; telnet JSON API is fully functional now.
 
 

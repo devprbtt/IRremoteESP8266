@@ -61,7 +61,8 @@ typedef struct {
     wifi_cfg_t wifi;
     modbus_cfg_t modbus;
     hvac_cfg_t hvac;
-    char ota_url[APP_CFG_OTA_URL_LEN + 1];
+    char ota_firmware_url[APP_CFG_OTA_URL_LEN + 1];
+    char ota_filesystem_url[APP_CFG_OTA_URL_LEN + 1];
 } app_config_t;
 
 void app_config_set_defaults(app_config_t *cfg);
