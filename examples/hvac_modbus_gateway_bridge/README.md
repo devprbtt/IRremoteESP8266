@@ -1,7 +1,7 @@
-# ESP32 LG Modbus Gateway Telnet Bridge (ESP-IDF v5.x via PlatformIO)
+# ESP32 HVAC Modbus Gateway Bridge (ESP-IDF v5.x via PlatformIO)
 
 Production-oriented ESP32 firmware that:
-- Talks Modbus RTU over RS-485 to LG PMBUSB00A.
+- Talks Modbus RTU over RS-485 to LG PMBUSB00A, Midea GW3-MOD, and Daikin DTA116A51.
 - Polls and caches HVAC points for multiple indoor units (zones).
 - Exposes a telnet JSON API for read/write operations.
 - Exposes a d3net-style web interface and JSON API for monitoring/configuration.
@@ -30,7 +30,7 @@ Production-oriented ESP32 firmware that:
 - Configuration in NVS:
   - Wi-Fi
   - Modbus UART/pins/baud/slave/timeout/retries
-  - HVAC zones + `idu_address_base`
+- HVAC zones + `idu_address_base` + `gateway_type`
   - log level/device id
 
 ## Project Layout
@@ -64,7 +64,7 @@ Use a common reference and proper RS-485 wiring/termination practices. Keep bus 
 
 ## Build / Flash (PlatformIO)
 
-From `examples/lg_hvac_modbus_telnet`:
+From `examples/hvac_modbus_gateway_bridge`:
 
 ```bash
 pio run
@@ -80,7 +80,7 @@ Recommended first flash sequence:
 2. `pio run -t uploadfs --upload-port <PORT>`
 
 In VS Code PlatformIO extension:
-- Open `examples/lg_hvac_modbus_telnet` as the project folder.
+- Open `examples/hvac_modbus_gateway_bridge` as the project folder.
 - Use Build / Upload / Monitor from the PlatformIO sidebar.
 
 ## Optional ESP-IDF CLI Build
@@ -104,12 +104,26 @@ idf.py -p <PORT> spiffs-flash
 - Poll interval: `3000ms` per round-robin step
 - Zones: `1:0,1:1,1:2` (format `slave:central_address`)
 - `idu_address_base=0`
+- `gateway_type=lg_pmbusb00a`
+
+## Gateway Selection
+
+Set the active mapping profile to match your gateway:
+
+- `lg_pmbusb00a` (LG PMBUSB00A)
+- `midea_gw3_mod` (Midea GW3-MOD)
+- `daikin_dta116a51` (Daikin DTA116A51 / d3net Modbus map)
+
+Ways to set:
+
+- Web config: `/config` page, field `gateway_type`
+- Telnet: `CONFIG SET GATEWAY <lg|midea|daikin>` then `CONFIG SAVE` and reboot
 
 ## Wi-Fi Behavior
 
 - If Wi-Fi credentials exist in NVS: starts STA and connects.
 - If not configured: starts SoftAP and serves the full web UI.
-  - SSID: `LGHVAC-SETUP-XXXXXX`
+  - SSID: `HVACGW-SETUP-XXXXXX`
   - Connect and open `http://192.168.4.1`
   - Configure settings in `/config`; firmware saves to NVS and reboots.
 
@@ -202,6 +216,19 @@ For `N=2`:
 - `connected`: discrete offset `1`
 - `alarm`: discrete offset `2`
 
+## Midea GW3-MOD Mapping Notes
+
+Implemented profile based on GW3-MOD mapping tables:
+
+- Discrete (FC02): `10001 + N*8` on/off, `10002 + N*8` fault, `10003 + N*8` online
+- Input (FC04): `30001 + N*32` mode, `30002 + N*32` fan, `30003 + N*32` setpoint, `30006 + N*32` room temp, `30007 + N*32` error
+- Holding control (FC10 preferred): starts at `40002 + N*25` for mode/fan/setpoint control triplet
+
+Firmware behavior for Midea writes:
+
+- Uses multi-register write (`0x10`) for mode/fan/setpoint control block
+- Performs read-back verification from input/discrete status
+
 ## Example Configurations
 
 ### Multi V style (`idu_address_base=0`)
@@ -216,3 +243,5 @@ For `N=2`:
 
 - OTA is not enabled yet. Add HTTPS OTA flow using `esp_https_ota` and `ota_url` from config.
 - Optional serial CLI can be added later; telnet JSON API is fully functional now.
+
+

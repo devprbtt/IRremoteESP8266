@@ -266,6 +266,22 @@ static esp_err_t handle_config_save(httpd_req_t *req)
 
     apply_optional_int(json, "idu_address_base", &s->cfg->hvac.idu_address_base);
     apply_optional_int(json, "poll_interval_ms", &s->cfg->hvac.poll_interval_ms);
+    cJSON *gateway_type = cJSON_GetObjectItemCaseSensitive(json, "gateway_type");
+    if (cJSON_IsString(gateway_type) && gateway_type->valuestring) {
+        if (strcmp(gateway_type->valuestring, "midea_gw3_mod") == 0 || strcmp(gateway_type->valuestring, "midea") == 0) {
+            s->cfg->hvac.gateway_type = HVAC_GATEWAY_MIDEA_GW3_MOD;
+            if (s->cfg->hvac.idu_address_base != 0) {
+                s->cfg->hvac.idu_address_base = 0;
+            }
+        } else if (strcmp(gateway_type->valuestring, "daikin_dta116a51") == 0 || strcmp(gateway_type->valuestring, "daikin") == 0) {
+            s->cfg->hvac.gateway_type = HVAC_GATEWAY_DAIKIN_DTA116A51;
+            if (s->cfg->hvac.idu_address_base != 0) {
+                s->cfg->hvac.idu_address_base = 0;
+            }
+        } else {
+            s->cfg->hvac.gateway_type = HVAC_GATEWAY_LG_PMBUSB00A;
+        }
+    }
 
     cJSON *default_slave = cJSON_GetObjectItemCaseSensitive(json, "default_slave_id");
     if (cJSON_IsNumber(default_slave)) {

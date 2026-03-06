@@ -17,6 +17,12 @@ typedef struct {
     uint16_t central_address;
 } zone_cfg_t;
 
+typedef enum {
+    HVAC_GATEWAY_LG_PMBUSB00A = 0,
+    HVAC_GATEWAY_MIDEA_GW3_MOD = 1,
+    HVAC_GATEWAY_DAIKIN_DTA116A51 = 2,
+} hvac_gateway_type_t;
+
 typedef struct {
     int uart_num;
     int tx_pin;
@@ -30,6 +36,7 @@ typedef struct {
 } modbus_cfg_t;
 
 typedef struct {
+    hvac_gateway_type_t gateway_type;
     int idu_address_base;
     int poll_interval_ms;
     int mode_rate_limit_ms;

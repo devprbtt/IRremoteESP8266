@@ -67,7 +67,7 @@ static esp_err_t start_provision_ap(wifi_manager_t *mgr)
     uint8_t mac[6] = {0};
     esp_wifi_get_mac(WIFI_IF_STA, mac);
 
-    snprintf(mgr->ap_ssid, sizeof(mgr->ap_ssid), "LGHVAC-SETUP-%02X%02X%02X", mac[3], mac[4], mac[5]);
+    snprintf(mgr->ap_ssid, sizeof(mgr->ap_ssid), "HVACGW-SETUP-%02X%02X%02X", mac[3], mac[4], mac[5]);
 
     wifi_config_t ap_cfg = {0};
     strlcpy((char *)ap_cfg.ap.ssid, mgr->ap_ssid, sizeof(ap_cfg.ap.ssid));

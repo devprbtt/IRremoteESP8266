@@ -89,7 +89,7 @@ static esp_err_t transact_once(modbus_client_t *c, const uint8_t *req, size_t re
     size_t total = 0;
     if ((head[1] & 0x80) != 0) {
         total = 5;
-    } else if (head[1] == 0x05 || head[1] == 0x06) {
+    } else if (head[1] == 0x05 || head[1] == 0x06 || head[1] == 0x10) {
         total = 8;
     } else {
         total = (size_t)(3 + head[2] + 2);
@@ -359,4 +359,53 @@ uint8_t modbus_client_get_last_exception(const modbus_client_t *client)
         return 0;
     }
     return client->last_exception;
+}
+
+esp_err_t modbus_write_multiple_registers(modbus_client_t *client, uint8_t slave, uint16_t addr, const uint16_t *values, uint16_t qty)
+{
+    if (!client || !values || qty == 0 || qty > 123) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    uint8_t req[MB_MAX_ADU] = {0};
+    size_t req_len = (size_t)(9 + qty * 2);
+    if (req_len > MB_MAX_ADU) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    req[0] = slave;
+    req[1] = 0x10;
+    req[2] = (uint8_t)(addr >> 8);
+    req[3] = (uint8_t)(addr & 0xFF);
+    req[4] = (uint8_t)(qty >> 8);
+    req[5] = (uint8_t)(qty & 0xFF);
+    req[6] = (uint8_t)(qty * 2);
+    for (uint16_t i = 0; i < qty; i++) {
+        req[7 + i * 2] = (uint8_t)(values[i] >> 8);
+        req[8 + i * 2] = (uint8_t)(values[i] & 0xFF);
+    }
+
+    uint16_t crc = modbus_crc16(req, req_len - 2);
+    req[req_len - 2] = (uint8_t)(crc & 0xFF);
+    req[req_len - 1] = (uint8_t)(crc >> 8);
+
+    uint8_t rsp[MB_MAX_ADU] = {0};
+    size_t rsp_len = 0;
+
+    if (xSemaphoreTake(client->lock, pdMS_TO_TICKS(client->cfg.timeout_ms * 4)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    esp_err_t err = transact(client, req, req_len, rsp, &rsp_len);
+    xSemaphoreGive(client->lock);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    uint16_t echoed_addr = ((uint16_t)rsp[2] << 8) | rsp[3];
+    uint16_t echoed_qty = ((uint16_t)rsp[4] << 8) | rsp[5];
+    if (echoed_addr != addr || echoed_qty != qty) {
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    return ESP_OK;
 }
