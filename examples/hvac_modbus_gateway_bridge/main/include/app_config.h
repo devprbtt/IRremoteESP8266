@@ -21,6 +21,7 @@ typedef enum {
     HVAC_GATEWAY_LG_PMBUSB00A = 0,
     HVAC_GATEWAY_MIDEA_GW3_MOD = 1,
     HVAC_GATEWAY_DAIKIN_DTA116A51 = 2,
+    HVAC_GATEWAY_HITACHI_HCA_MB = 3,
 } hvac_gateway_type_t;
 
 typedef struct {

@@ -227,8 +227,15 @@ esp_err_t app_config_load(app_config_t *cfg)
     nvs_get_i32_into_int(h, "idu_base", &cfg->hvac.idu_address_base);
     uint8_t gw = (uint8_t)cfg->hvac.gateway_type;
     nvs_get_u8(h, "gw_type", &gw);
-    cfg->hvac.gateway_type =
-        (gw == 1) ? HVAC_GATEWAY_MIDEA_GW3_MOD : ((gw == 2) ? HVAC_GATEWAY_DAIKIN_DTA116A51 : HVAC_GATEWAY_LG_PMBUSB00A);
+    if (gw == 1) {
+        cfg->hvac.gateway_type = HVAC_GATEWAY_MIDEA_GW3_MOD;
+    } else if (gw == 2) {
+        cfg->hvac.gateway_type = HVAC_GATEWAY_DAIKIN_DTA116A51;
+    } else if (gw == 3) {
+        cfg->hvac.gateway_type = HVAC_GATEWAY_HITACHI_HCA_MB;
+    } else {
+        cfg->hvac.gateway_type = HVAC_GATEWAY_LG_PMBUSB00A;
+    }
     nvs_get_i32_into_int(h, "poll_ms", &cfg->hvac.poll_interval_ms);
     nvs_get_i32_into_int(h, "mode_rl_ms", &cfg->hvac.mode_rate_limit_ms);
     nvs_get_i32_into_int(h, "sp_min", &cfg->hvac.setpoint_min_tenths);
@@ -337,7 +344,9 @@ esp_err_t app_config_to_json(const app_config_t *cfg, char *out, size_t out_len)
                             cfg->modbus.use_hw_rs485 ? "true" : "false",
                             cfg->hvac.gateway_type == HVAC_GATEWAY_MIDEA_GW3_MOD
                                 ? "midea_gw3_mod"
-                                : (cfg->hvac.gateway_type == HVAC_GATEWAY_DAIKIN_DTA116A51 ? "daikin_dta116a51" : "lg_pmbusb00a"),
+                                : (cfg->hvac.gateway_type == HVAC_GATEWAY_DAIKIN_DTA116A51
+                                       ? "daikin_dta116a51"
+                                       : (cfg->hvac.gateway_type == HVAC_GATEWAY_HITACHI_HCA_MB ? "hitachi_hca_mb" : "lg_pmbusb00a")),
                             cfg->hvac.idu_address_base,
                             cfg->hvac.poll_interval_ms,
                             cfg->hvac.mode_rate_limit_ms,

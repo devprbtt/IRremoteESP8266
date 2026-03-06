@@ -1,7 +1,7 @@
 # ESP32 HVAC Modbus Gateway Bridge (ESP-IDF v5.x via PlatformIO)
 
 Production-oriented ESP32 firmware that:
-- Talks Modbus RTU over RS-485 to LG PMBUSB00A, Midea GW3-MOD, and Daikin DTA116A51.
+- Talks Modbus RTU over RS-485 to LG PMBUSB00A, Midea GW3-MOD, Daikin DTA116A51, and Hitachi HC-A(8/16/64)MB.
 - Polls and caches HVAC points for multiple indoor units (zones).
 - Exposes a telnet JSON API for read/write operations.
 - Exposes a d3net-style web interface and JSON API for monitoring/configuration.
@@ -114,11 +114,12 @@ Set the active mapping profile to match your gateway:
 - `lg_pmbusb00a` (LG PMBUSB00A)
 - `midea_gw3_mod` (Midea GW3-MOD)
 - `daikin_dta116a51` (Daikin DTA116A51 / d3net Modbus map)
+- `hitachi_hca_mb` (Hitachi HC-A(8/16/64)MB indoor-unit map)
 
 Ways to set:
 
 - Web config: `/config` page, field `gateway_type`
-- Telnet: `CONFIG SET GATEWAY <lg|midea|daikin>` then `CONFIG SAVE` and reboot
+- Telnet: `CONFIG SET GATEWAY <lg|midea|daikin|hitachi>` then `CONFIG SAVE` and reboot
 
 ## Wi-Fi Behavior
 
@@ -255,6 +256,25 @@ For `N=2`:
 - `connected`: discrete offset `1`
 - `alarm`: discrete offset `2`
 
+## Hitachi HC-A(8/16/64)MB Mapping
+
+This profile uses the manual formula: `addr = 2000 + (indoor_address * 32) + offset`.
+
+- Read source: holding registers, 32-word block per indoor address
+- `connected`: offset `0` (`exist`)
+- `power`: status offset `9`, write order offset `3` (`0 stop`, `1 run`)
+- `mode`: status offset `10`, write order offset `4`
+  - Hitachi: `0 cool, 1 dry, 2 fan, 3 heat, 4 auto`
+  - API mode: `0 cool, 1 dry, 2 fan, 3 auto, 4 heat`
+- `fan_speed`: status offset `11`, write order offset `5`
+  - Hitachi: `0 low, 1 medium, 2 high, 3 high2, 4 auto`
+  - API fan: `1 low, 2 mid, 3 high, 4 auto`
+- `setpoint`: status offset `12`, write order offset `6`
+  - Hitachi units are integer Celsius; firmware rounds API tenths to nearest whole degree.
+- `room_temperature`: offset `24` (ambient temperature, converted to x10)
+- `error_code`: offset `19` (alarm code)
+- `alarm`: true when operation condition offset `22` is alarm (`3`) or alarm code is non-zero
+
 ## Midea GW3-MOD Mapping Notes
 
 Implemented profile based on GW3-MOD mapping tables:
@@ -281,5 +301,3 @@ Firmware behavior for Midea writes:
 ## Notes
 
 - Optional serial CLI can be added later; telnet JSON API is fully functional now.
-
-

@@ -63,6 +63,11 @@ static inline uint16_t daikin_unit_error_addr(uint16_t n)
     return (uint16_t)(3600U + (n * 2U));
 }
 
+static inline uint16_t hitachi_holding_addr(uint16_t n, uint16_t offset0)
+{
+    return (uint16_t)(2000U + (n * 32U) + offset0);
+}
+
 static inline bool bit_get(const uint8_t *bytes, int bit)
 {
     return (bytes[bit / 8] & (1U << (bit % 8))) != 0;
@@ -174,6 +179,73 @@ static inline uint16_t generic_fan_to_daikin(uint16_t gf)
     }
 }
 
+static inline int16_t hitachi_mode_to_generic(uint16_t hm)
+{
+    switch (hm) {
+        case 0:
+            return 0; // cool
+        case 1:
+            return 1; // dry
+        case 2:
+            return 2; // fan
+        case 3:
+            return 4; // heat
+        case 4:
+            return 3; // auto
+        default:
+            return 3;
+    }
+}
+
+static inline uint16_t generic_mode_to_hitachi(uint16_t gm)
+{
+    switch (gm) {
+        case 0:
+            return 0; // cool
+        case 1:
+            return 1; // dry
+        case 2:
+            return 2; // fan
+        case 3:
+            return 4; // auto
+        case 4:
+            return 3; // heat
+        default:
+            return 4;
+    }
+}
+
+static inline uint8_t hitachi_fan_to_generic(uint16_t hf)
+{
+    switch (hf) {
+        case 0:
+            return 1; // low
+        case 1:
+            return 2; // medium
+        case 2:
+        case 3:
+            return 3; // high/high2
+        case 4:
+        default:
+            return 4; // auto
+    }
+}
+
+static inline uint16_t generic_fan_to_hitachi(uint16_t gf)
+{
+    switch (gf) {
+        case 1:
+            return 0; // low
+        case 2:
+            return 1; // medium
+        case 3:
+            return 2; // high
+        case 4:
+        default:
+            return 4; // auto
+    }
+}
+
 static void set_zone_error(hvac_zone_state_t *z, const char *err)
 {
     strlcpy(z->last_error, err, sizeof(z->last_error));
@@ -240,6 +312,24 @@ static esp_err_t refresh_one(hvac_manager_t *mgr, size_t idx)
         z->room_temp_tenths = (int16_t)status[4];
         z->alarm = word_bit_get(error, 2, 25);
         z->error_code = (uint16_t)(((error[0] & 0xFFU) << 8) | ((error[0] >> 8) & 0xFFU));
+    } else if (mgr->cfg.hvac.gateway_type == HVAC_GATEWAY_HITACHI_HCA_MB) {
+        // Hitachi HC-A(8/16/64)MB indoor unit map:
+        // addr = 2000 + (address * 32) + offset
+        uint16_t regs[32] = {0};
+        err = modbus_read_holding(mgr->modbus, z->slave_id, hitachi_holding_addr(n, 0), 32, regs, 32);
+        if (err != ESP_OK) {
+            set_zone_error(z, "hitachi read holding failed");
+            return err;
+        }
+
+        z->connected = (regs[0] != 0U);
+        z->power = (regs[9] != 0U);
+        z->mode = (uint8_t)hitachi_mode_to_generic(regs[10]);
+        z->fan_speed = hitachi_fan_to_generic(regs[11]);
+        z->setpoint_tenths = (int16_t)((int16_t)regs[12] * 10);
+        z->room_temp_tenths = (int16_t)((int16_t)regs[24] * 10);
+        z->error_code = regs[19];
+        z->alarm = (regs[22] == 3U) || (regs[19] != 0U);
     } else {
         err = modbus_read_coils(mgr->modbus, z->slave_id, get_coil_address(n, 1), 1, coil_bits, sizeof(coil_bits));
         if (err != ESP_OK) {
@@ -323,6 +413,21 @@ static esp_err_t write_verify_power(hvac_manager_t *mgr, hvac_zone_state_t *z, b
             return err;
         }
         return (word_bit_get(verify, 6, 0) == value) ? ESP_OK : ESP_ERR_INVALID_RESPONSE;
+    }
+
+    if (mgr->cfg.hvac.gateway_type == HVAC_GATEWAY_HITACHI_HCA_MB) {
+        uint16_t addr = hitachi_holding_addr(z->central_address, 3);
+        uint16_t raw = value ? 1U : 0U;
+        esp_err_t err = modbus_write_single_register(mgr->modbus, z->slave_id, addr, raw);
+        if (err != ESP_OK) {
+            return err;
+        }
+        uint16_t verify = 0;
+        err = modbus_read_holding(mgr->modbus, z->slave_id, hitachi_holding_addr(z->central_address, 9), 1, &verify, 1);
+        if (err != ESP_OK) {
+            return err;
+        }
+        return ((verify != 0U) == value) ? ESP_OK : ESP_ERR_INVALID_RESPONSE;
     }
 
     uint16_t addr = get_coil_address(z->central_address, 1);
@@ -456,6 +561,56 @@ static esp_err_t write_verify_holding(hvac_manager_t *mgr, hvac_zone_state_t *z,
             return (daikin_fan_to_generic(word_uint_get(verify, 6, 12, 3)) == (uint8_t)value) ? ESP_OK : ESP_ERR_INVALID_RESPONSE;
         }
         return ((int16_t)verify[2] == (int16_t)value) ? ESP_OK : ESP_ERR_INVALID_RESPONSE;
+    }
+
+    if (mgr->cfg.hvac.gateway_type == HVAC_GATEWAY_HITACHI_HCA_MB) {
+        uint16_t n = z->central_address;
+        uint16_t write_offset = 0;
+        uint16_t verify_offset = 0;
+        uint16_t raw = 0;
+
+        if (offset == 1) {
+            write_offset = 4;  // mode order
+            verify_offset = 10; // mode status
+            raw = generic_mode_to_hitachi(value);
+        } else if (offset == 2) {
+            write_offset = 5;  // fan order
+            verify_offset = 11; // fan status
+            raw = generic_fan_to_hitachi(value);
+        } else if (offset == 3) {
+            write_offset = 6;  // setpoint order (integer C)
+            verify_offset = 12; // setpoint status (integer C)
+            int32_t whole = ((int32_t)value + 5) / 10;
+            if (whole < 0) {
+                whole = 0;
+            } else if (whole > 50) {
+                whole = 50;
+            }
+            raw = (uint16_t)whole;
+        } else {
+            return ESP_ERR_INVALID_ARG;
+        }
+
+        uint16_t addr = hitachi_holding_addr(n, write_offset);
+        esp_err_t err = modbus_write_single_register(mgr->modbus, z->slave_id, addr, raw);
+        if (err != ESP_OK) {
+            return err;
+        }
+
+        uint16_t verify = 0;
+        err = modbus_read_holding(mgr->modbus, z->slave_id, hitachi_holding_addr(n, verify_offset), 1, &verify, 1);
+        if (err != ESP_OK) {
+            return err;
+        }
+
+        if (offset == 1) {
+            return (hitachi_mode_to_generic(verify) == (int16_t)value) ? ESP_OK : ESP_ERR_INVALID_RESPONSE;
+        }
+        if (offset == 2) {
+            return (hitachi_fan_to_generic(verify) == (uint8_t)value) ? ESP_OK : ESP_ERR_INVALID_RESPONSE;
+        }
+        int16_t verify_tenths = (int16_t)((int16_t)verify * 10);
+        return (verify_tenths == (int16_t)(((int32_t)value + 5) / 10 * 10)) ? ESP_OK : ESP_ERR_INVALID_RESPONSE;
     }
 
     uint16_t addr = get_holding_address(z->central_address, offset);

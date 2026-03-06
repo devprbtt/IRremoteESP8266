@@ -37,6 +37,9 @@ static const char *gateway_type_to_string(hvac_gateway_type_t t)
     if (t == HVAC_GATEWAY_DAIKIN_DTA116A51) {
         return "daikin_dta116a51";
     }
+    if (t == HVAC_GATEWAY_HITACHI_HCA_MB) {
+        return "hitachi_hca_mb";
+    }
     return "lg_pmbusb00a";
 }
 
@@ -363,6 +366,11 @@ static esp_err_t handle_config_save(httpd_req_t *req)
             }
         } else if (strcmp(gateway_type->valuestring, "daikin_dta116a51") == 0 || strcmp(gateway_type->valuestring, "daikin") == 0) {
             s->cfg->hvac.gateway_type = HVAC_GATEWAY_DAIKIN_DTA116A51;
+            if (s->cfg->hvac.idu_address_base != 0) {
+                s->cfg->hvac.idu_address_base = 0;
+            }
+        } else if (strcmp(gateway_type->valuestring, "hitachi_hca_mb") == 0 || strcmp(gateway_type->valuestring, "hitachi") == 0) {
+            s->cfg->hvac.gateway_type = HVAC_GATEWAY_HITACHI_HCA_MB;
             if (s->cfg->hvac.idu_address_base != 0) {
                 s->cfg->hvac.idu_address_base = 0;
             }

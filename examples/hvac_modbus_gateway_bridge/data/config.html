@@ -65,6 +65,7 @@
             <option value="lg_pmbusb00a">LG PMBUSB00A</option>
             <option value="midea_gw3_mod">Midea GW3-MOD</option>
             <option value="daikin_dta116a51">Daikin DTA116A51</option>
+            <option value="hitachi_hca_mb">Hitachi HC-A MB</option>
           </select>
           <div id="gateway_hint" class="hint"></div>
         </div>
@@ -150,6 +151,13 @@
         spMax: 300,
         zonesPlaceholder: "1:0,1:1,1:2",
         hint: "Daikin DTA116A51 (d3net map): IDU base fixed to 0."
+      },
+      hitachi_hca_mb: {
+        iduBase: 0,
+        spMin: 160,
+        spMax: 320,
+        zonesPlaceholder: "1:0,1:1,1:2",
+        hint: "Hitachi HC-A(8/16/64)MB indoor map (N=2000 + address*32 + offset), IDU base fixed to 0."
       }
     };
 
