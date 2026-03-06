@@ -1,0 +1,20 @@
+<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
+<style>body{font-family:Arial,sans-serif;margin:0;background:#101319;color:#e6edf3}.wrap{max-width:980px;margin:0 auto;padding:14px}.c{background:#171b22;border:1px solid #293042;border-radius:8px;padding:10px;margin:10px 0}nav{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px}a{color:#101319;background:#d0d7de;padding:6px 9px;border-radius:6px;text-decoration:none;font-weight:600}input,select,button{width:100%;box-sizing:border-box;margin:4px 0;padding:7px;border-radius:6px;border:1px solid #3a4458;background:#0f141b;color:#e6edf3}button{cursor:pointer;background:#2ea043;border:0;color:#fff;font-weight:600}button.s{background:#1f6feb}.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}pre{white-space:pre-wrap;word-break:break-word;background:#0f141b;border:1px solid #3a4458;padding:8px;border-radius:6px}</style>
+</head><body><div class='wrap'>
+<nav><a href='/'>Home</a><a href='/config'>Config</a><a href='/monitor'>Monitor</a></nav>
+<h2>Zone Monitor & Commands</h2>
+<div class='c'>
+<div class='grid'><input id='idx' type='number' min='0' placeholder='Zone index'><select id='field'><option>power</option><option>mode</option><option>fan</option><option>setpoint</option></select></div>
+<input id='value' placeholder='Value'>
+<div class='grid'><button onclick='sendCmd()'>Send Command</button><button class='s' onclick='readZone()'>Read Zone</button></div>
+<pre id='out'>Ready</pre>
+</div>
+<div class='c'><pre id='zones'>loading...</pre></div>
+<script>
+const J=(u,o)=>fetch(u,o).then(r=>r.json());
+const P=(u,b)=>fetch(u,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}).then(r=>r.json());
+async function sendCmd(){out.textContent=JSON.stringify(await P('/api/hvac/cmd',{index:+idx.value,field:field.value,value:value.value}),null,2);refresh();}
+async function readZone(){out.textContent=JSON.stringify(await P('/api/hvac/read',{index:+idx.value}),null,2);refresh();}
+async function refresh(){zones.textContent=JSON.stringify((await J('/api/zones')).zones||[],null,2);}
+setInterval(refresh,3000);refresh();
+</script></div></body></html>

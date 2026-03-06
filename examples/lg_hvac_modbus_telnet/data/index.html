@@ -1,0 +1,18 @@
+<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
+<style>body{font-family:Arial,sans-serif;margin:0;background:#101319;color:#e6edf3}.wrap{max-width:980px;margin:0 auto;padding:14px}.c{background:#171b22;border:1px solid #293042;border-radius:8px;padding:10px;margin:10px 0}nav{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px}a{color:#101319;background:#d0d7de;padding:6px 9px;border-radius:6px;text-decoration:none;font-weight:600}.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}pre{white-space:pre-wrap;word-break:break-word;background:#0f141b;border:1px solid #3a4458;padding:8px;border-radius:6px}</style>
+</head><body><div class='wrap'>
+<nav><a href='/'>Home</a><a href='/config'>Config</a><a href='/monitor'>Monitor</a></nav>
+<h2>LG HVAC Modbus Gateway</h2>
+<div class='grid'><div class='c'><b>Network</b><pre id='net'>loading...</pre></div><div class='c'><b>System</b><pre id='sys'>loading...</pre></div></div>
+<div class='c'><b>Zones</b><pre id='zones'>loading...</pre></div>
+<script>
+const J=(u,o)=>fetch(u,o).then(r=>r.json());
+async function refresh(){
+  const s=await J('/api/status');
+  const z=await J('/api/zones');
+  net.textContent=`Mode: ${s.wifi_mode}\nConnected: ${s.wifi_connected}\nIP: ${s.ip||'-'}\nAP SSID: ${s.ap_ssid||'-'}`;
+  sys.textContent=`Device: ${s.device_id}\nUptime ms: ${s.uptime_ms}\nIDU base: ${s.idu_address_base}\nPoll ms: ${s.poll_interval_ms}`;
+  zones.textContent=JSON.stringify(z.zones||[],null,2);
+}
+setInterval(refresh,3000);refresh();
+</script></div></body></html>
