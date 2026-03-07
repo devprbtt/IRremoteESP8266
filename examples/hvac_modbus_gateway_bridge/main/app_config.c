@@ -239,6 +239,8 @@ esp_err_t app_config_load(app_config_t *cfg)
         cfg->hvac.gateway_type = HVAC_GATEWAY_HITACHI_HCA_MB;
     } else if (gw == 4) {
         cfg->hvac.gateway_type = HVAC_GATEWAY_SAMSUNG_MIM_B19N;
+    } else if (gw == 5) {
+        cfg->hvac.gateway_type = HVAC_GATEWAY_GREE_GMV;
     } else {
         cfg->hvac.gateway_type = HVAC_GATEWAY_LG_PMBUSB00A;
     }
@@ -360,7 +362,9 @@ esp_err_t app_config_to_json(const app_config_t *cfg, char *out, size_t out_len)
                                               ? "hitachi_hca_mb"
                                               : (cfg->hvac.gateway_type == HVAC_GATEWAY_SAMSUNG_MIM_B19N
                                                      ? "samsung_mim_b19n"
-                                                     : "lg_pmbusb00a"))),
+                                                     : (cfg->hvac.gateway_type == HVAC_GATEWAY_GREE_GMV
+                                                            ? "gree_gmv"
+                                                            : "lg_pmbusb00a")))),
                             cfg->hvac.idu_address_base,
                             cfg->hvac.poll_interval_ms,
                             cfg->hvac.mode_rate_limit_ms,

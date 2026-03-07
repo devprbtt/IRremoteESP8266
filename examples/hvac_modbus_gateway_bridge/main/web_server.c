@@ -43,6 +43,9 @@ static const char *gateway_type_to_string(hvac_gateway_type_t t)
     if (t == HVAC_GATEWAY_SAMSUNG_MIM_B19N) {
         return "samsung_mim_b19n";
     }
+    if (t == HVAC_GATEWAY_GREE_GMV) {
+        return "gree_gmv";
+    }
     return "lg_pmbusb00a";
 }
 
@@ -381,6 +384,11 @@ static esp_err_t handle_config_save(httpd_req_t *req)
             s->cfg->hvac.gateway_type = HVAC_GATEWAY_SAMSUNG_MIM_B19N;
             if (s->cfg->hvac.idu_address_base != 0) {
                 s->cfg->hvac.idu_address_base = 0;
+            }
+        } else if (strcmp(gateway_type->valuestring, "gree_gmv") == 0 || strcmp(gateway_type->valuestring, "gree") == 0) {
+            s->cfg->hvac.gateway_type = HVAC_GATEWAY_GREE_GMV;
+            if (s->cfg->hvac.idu_address_base != 1) {
+                s->cfg->hvac.idu_address_base = 1;
             }
         } else {
             s->cfg->hvac.gateway_type = HVAC_GATEWAY_LG_PMBUSB00A;

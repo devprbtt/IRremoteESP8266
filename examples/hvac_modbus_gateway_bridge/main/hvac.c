@@ -73,6 +73,21 @@ static inline uint16_t samsung_holding_addr(uint16_t n, uint16_t offset0)
     return (uint16_t)(50U + (n * 50U) + offset0);
 }
 
+static inline uint16_t gree_holding_addr(uint16_t n, uint16_t offset0)
+{
+    return (uint16_t)(102U + ((n - 1U) * 25U) + offset0);
+}
+
+static inline uint16_t gree_coil_addr(uint16_t n)
+{
+    return (uint16_t)(120U + (n - 1U));
+}
+
+static inline uint16_t gree_alarm_coil_addr(uint16_t n)
+{
+    return (uint16_t)(319U + ((n - 1U) * 64U));
+}
+
 static inline bool bit_get(const uint8_t *bytes, int bit)
 {
     return (bytes[bit / 8] & (1U << (bit % 8))) != 0;
@@ -320,6 +335,83 @@ static inline uint16_t generic_fan_to_samsung(uint16_t gf)
     }
 }
 
+static inline int16_t gree_mode_to_generic(uint16_t gm)
+{
+    switch (gm) {
+        case 1:
+            return 0; // cooling
+        case 2:
+        case 13:
+            return 1; // dehumidifying / auto dehumidify
+        case 3:
+        case 11:
+        case 12:
+            return 2; // fan / ventilation / fresh
+        case 4:
+        case 6:
+        case 7:
+        case 8:
+        case 9:
+            return 4; // heating family
+        case 5:
+        default:
+            return 3; // automatic / auto cool
+    }
+}
+
+static inline uint16_t generic_mode_to_gree(uint16_t gm)
+{
+    switch (gm) {
+        case 0:
+            return 1; // cooling
+        case 1:
+            return 2; // dehumidifying
+        case 2:
+            return 3; // fan
+        case 3:
+            return 5; // automatic
+        case 4:
+            return 4; // heating
+        default:
+            return 5;
+    }
+}
+
+static inline uint8_t gree_fan_to_generic(uint16_t gf)
+{
+    switch (gf) {
+        case 2:
+        case 3:
+            return 1; // low / medium-low
+        case 4:
+        case 5:
+            return 2; // medium / medium-high
+        case 6:
+        case 7:
+        case 8:
+            return 3; // high / turbo / ultra-high
+        case 1:
+        case 0:
+        default:
+            return 4; // auto / stop / invalid
+    }
+}
+
+static inline uint16_t generic_fan_to_gree(uint16_t gf)
+{
+    switch (gf) {
+        case 1:
+            return 2; // low
+        case 2:
+            return 4; // medium
+        case 3:
+            return 6; // high
+        case 4:
+        default:
+            return 1; // auto
+    }
+}
+
 static void set_zone_error(hvac_zone_state_t *z, const char *err)
 {
     strlcpy(z->last_error, err, sizeof(z->last_error));
@@ -423,6 +515,35 @@ static esp_err_t refresh_one(hvac_manager_t *mgr, size_t idx)
         z->room_temp_tenths = (int16_t)regs[9];
         z->error_code = regs[14];
         z->alarm = ((comm & 0x0008U) != 0U) || (regs[14] != 0U);
+    } else if (mgr->cfg.hvac.gateway_type == HVAC_GATEWAY_GREE_GMV) {
+        uint8_t connected_bits[1] = {0};
+        uint8_t alarm_bits[1] = {0};
+        uint16_t regs[15] = {0};
+
+        err = modbus_read_coils(mgr->modbus, z->slave_id, gree_coil_addr(n), 1, connected_bits, sizeof(connected_bits));
+        if (err != ESP_OK) {
+            set_zone_error(z, "gree read present failed");
+            return err;
+        }
+        err = modbus_read_coils(mgr->modbus, z->slave_id, gree_alarm_coil_addr(n), 1, alarm_bits, sizeof(alarm_bits));
+        if (err != ESP_OK) {
+            set_zone_error(z, "gree read alarm failed");
+            return err;
+        }
+        err = modbus_read_holding(mgr->modbus, z->slave_id, gree_holding_addr(n, 0), 15, regs, 15);
+        if (err != ESP_OK) {
+            set_zone_error(z, "gree read holding failed");
+            return err;
+        }
+
+        z->connected = bit_get(connected_bits, 0);
+        z->alarm = bit_get(alarm_bits, 0);
+        z->power = (regs[0] == 0x00AAU);
+        z->mode = (uint8_t)gree_mode_to_generic(regs[1]);
+        z->setpoint_tenths = (int16_t)regs[2];
+        z->fan_speed = gree_fan_to_generic(regs[3]);
+        z->room_temp_tenths = (int16_t)regs[14];
+        z->error_code = 0;
     } else {
         err = modbus_read_coils(mgr->modbus, z->slave_id, get_coil_address(n, 1), 1, coil_bits, sizeof(coil_bits));
         if (err != ESP_OK) {
@@ -536,6 +657,21 @@ static esp_err_t write_verify_power(hvac_manager_t *mgr, hvac_zone_state_t *z, b
             return err;
         }
         return ((verify != 0U) == value) ? ESP_OK : ESP_ERR_INVALID_RESPONSE;
+    }
+
+    if (mgr->cfg.hvac.gateway_type == HVAC_GATEWAY_GREE_GMV) {
+        uint16_t addr = gree_holding_addr(z->central_address, 0);
+        uint16_t raw = value ? 0x00AAU : 0x0055U;
+        esp_err_t err = modbus_write_multiple_registers(mgr->modbus, z->slave_id, addr, &raw, 1);
+        if (err != ESP_OK) {
+            return err;
+        }
+        uint16_t verify = 0;
+        err = modbus_read_holding(mgr->modbus, z->slave_id, addr, 1, &verify, 1);
+        if (err != ESP_OK) {
+            return err;
+        }
+        return ((verify == 0x00AAU) == value) ? ESP_OK : ESP_ERR_INVALID_RESPONSE;
     }
 
     uint16_t addr = get_coil_address(z->central_address, 1);
@@ -756,6 +892,45 @@ static esp_err_t write_verify_holding(hvac_manager_t *mgr, hvac_zone_state_t *z,
         }
         if (offset == 2) {
             return (samsung_fan_to_generic(verify) == (uint8_t)value) ? ESP_OK : ESP_ERR_INVALID_RESPONSE;
+        }
+        return ((int16_t)verify == (int16_t)value) ? ESP_OK : ESP_ERR_INVALID_RESPONSE;
+    }
+
+    if (mgr->cfg.hvac.gateway_type == HVAC_GATEWAY_GREE_GMV) {
+        uint16_t n = z->central_address;
+        uint16_t write_offset = 0;
+        uint16_t raw = 0;
+
+        if (offset == 1) {
+            write_offset = 1;
+            raw = generic_mode_to_gree(value);
+        } else if (offset == 2) {
+            write_offset = 3;
+            raw = generic_fan_to_gree(value);
+        } else if (offset == 3) {
+            write_offset = 2;
+            raw = value;
+        } else {
+            return ESP_ERR_INVALID_ARG;
+        }
+
+        uint16_t addr = gree_holding_addr(n, write_offset);
+        esp_err_t err = modbus_write_multiple_registers(mgr->modbus, z->slave_id, addr, &raw, 1);
+        if (err != ESP_OK) {
+            return err;
+        }
+
+        uint16_t verify = 0;
+        err = modbus_read_holding(mgr->modbus, z->slave_id, addr, 1, &verify, 1);
+        if (err != ESP_OK) {
+            return err;
+        }
+
+        if (offset == 1) {
+            return (gree_mode_to_generic(verify) == (int16_t)value) ? ESP_OK : ESP_ERR_INVALID_RESPONSE;
+        }
+        if (offset == 2) {
+            return (gree_fan_to_generic(verify) == (uint8_t)value) ? ESP_OK : ESP_ERR_INVALID_RESPONSE;
         }
         return ((int16_t)verify == (int16_t)value) ? ESP_OK : ESP_ERR_INVALID_RESPONSE;
     }

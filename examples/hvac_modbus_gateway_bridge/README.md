@@ -121,11 +121,12 @@ Set the active mapping profile to match your gateway:
 - `daikin_dta116a51` (Daikin DTA116A51 / d3net Modbus map)
 - `hitachi_hca_mb` (Hitachi HC-A(8/16/64)MB indoor-unit map)
 - `samsung_mim_b19n` (Samsung MIM-B19N / MIM-B19NT indoor-unit map)
+- `gree_gmv` (Gree GMV Multi VRF / CAN-mode Modbus map)
 
 Ways to set:
 
 - Web config: `/config` page, field `gateway_type`
-- Telnet: `CONFIG SET GATEWAY <lg|midea|daikin|hitachi|samsung>` then `CONFIG SAVE` and reboot
+- Telnet: `CONFIG SET GATEWAY <lg|midea|daikin|hitachi|samsung|gree>` then `CONFIG SAVE` and reboot
 
 Serial settings:
 - `/config` now exposes `baud`, `parity`, and `stop_bits`
@@ -146,6 +147,24 @@ Samsung notes:
   - cool=`1`, dry=`2`, fan=`3`, auto=`0`, heat=`4`
 - Generic fan mapping:
   - low=`1`, mid=`2`, high=`3`, auto=`0`
+
+Gree notes:
+- Serial defaults: `9600 8N1`
+- Indoor unit addresses are `1..128`
+- Core register formula: `word = 102 + 25 * (n - 1) + offset`
+- Core bit formulas:
+  - `connected = bit 120 + (n - 1)`
+  - `alarm = bit 319 + 64 * (n - 1)`
+- Implemented core fields:
+  - `power`: word `102 + 25*(n-1)` (`0xAA` on, `0x55` off)
+  - `mode`: word `103 + 25*(n-1)`
+  - `setpoint`: word `104 + 25*(n-1)` (`C x10`)
+  - `fan_speed`: word `105 + 25*(n-1)`
+  - `room_temperature`: word `116 + 25*(n-1)` (`C x10`)
+- Generic mode mapping:
+  - cool=`1`, dry=`2`, fan=`3`, auto=`5`, heat=`4`
+- Generic fan mapping used by this firmware:
+  - auto=`1`, low=`2`, mid=`4`, high=`6`
 
 ## Wi-Fi Behavior
 
