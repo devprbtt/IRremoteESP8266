@@ -66,6 +66,7 @@
             <option value="midea_gw3_mod">Midea GW3-MOD</option>
             <option value="daikin_dta116a51">Daikin DTA116A51</option>
             <option value="hitachi_hca_mb">Hitachi HC-A MB</option>
+            <option value="samsung_mim_b19n">Samsung MIM-B19N</option>
           </select>
           <div id="gateway_hint" class="hint"></div>
         </div>
@@ -97,6 +98,21 @@
       <div class="grid2">
         <div class="field"><label for="de_pin">DE Pin</label><input id="de_pin" type="number"></div>
         <div class="field"><label for="baud">Baud Rate</label><input id="baud" type="number"></div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label for="parity">Parity</label>
+          <select id="parity">
+            <option value="0">None</option>
+            <option value="1">Even</option>
+            <option value="2">Odd</option>
+          </select>
+        </div>
+        <div class="field"><label for="stop_bits">Stop Bits</label>
+          <select id="stop_bits">
+            <option value="1">1</option>
+            <option value="2">2</option>
+          </select>
+        </div>
       </div>
       <div class="grid2">
         <div class="field"><label for="timeout_ms">Timeout (ms)</label><input id="timeout_ms" type="number"></div>
@@ -133,6 +149,9 @@
     const GW = {
       lg_pmbusb00a: {
         iduBase: 0,
+        baud: 9600,
+        parity: 0,
+        stopBits: 1,
         spMin: 160,
         spMax: 300,
         zonesPlaceholder: "1:0,1:1,1:2",
@@ -140,6 +159,9 @@
       },
       midea_gw3_mod: {
         iduBase: 0,
+        baud: 9600,
+        parity: 0,
+        stopBits: 1,
         spMin: 160,
         spMax: 300,
         zonesPlaceholder: "1:0,1:1,1:2",
@@ -147,6 +169,9 @@
       },
       daikin_dta116a51: {
         iduBase: 0,
+        baud: 9600,
+        parity: 0,
+        stopBits: 1,
         spMin: 160,
         spMax: 300,
         zonesPlaceholder: "1:0,1:1,1:2",
@@ -154,10 +179,23 @@
       },
       hitachi_hca_mb: {
         iduBase: 0,
+        baud: 9600,
+        parity: 0,
+        stopBits: 1,
         spMin: 160,
         spMax: 320,
         zonesPlaceholder: "1:0,1:1,1:2",
         hint: "Hitachi HC-A(8/16/64)MB indoor map (N=2000 + address*32 + offset), IDU base fixed to 0."
+      },
+      samsung_mim_b19n: {
+        iduBase: 0,
+        baud: 9600,
+        parity: 1,
+        stopBits: 1,
+        spMin: 180,
+        spMax: 300,
+        zonesPlaceholder: "1:0,1:1,1:2",
+        hint: "Samsung MIM-B19N/B19NT indoor map uses PDU address 50 + (UI * 50) + offset. This profile exposes power, mode, fan, setpoint, room temp, error, and communication status."
       }
     };
 
@@ -183,6 +221,9 @@
       zones.placeholder = p.zonesPlaceholder;
       if (hardApply) {
         idu_address_base.value = p.iduBase;
+        baud.value = p.baud;
+        parity.value = p.parity;
+        stop_bits.value = p.stopBits;
         setpoint_min_tenths.value = p.spMin;
         setpoint_max_tenths.value = p.spMax;
       }
@@ -202,6 +243,8 @@
       rx_pin.value = c.modbus.rx;
       de_pin.value = c.modbus.de;
       baud.value = c.modbus.baud;
+      parity.value = c.modbus.parity ?? 0;
+      stop_bits.value = c.modbus.stop_bits ?? 1;
       timeout_ms.value = c.modbus.timeout_ms;
       retries.value = c.modbus.retries;
       setpoint_min_tenths.value = c.hvac.setpoint_min_tenths;
@@ -261,6 +304,8 @@
         rx_pin: +rx_pin.value,
         de_pin: +de_pin.value,
         baud: +baud.value,
+        parity: +parity.value,
+        stop_bits: +stop_bits.value,
         timeout_ms: +timeout_ms.value,
         retries: +retries.value,
         setpoint_min_tenths: +setpoint_min_tenths.value,

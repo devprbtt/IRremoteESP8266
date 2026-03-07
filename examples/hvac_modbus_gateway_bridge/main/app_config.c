@@ -43,6 +43,8 @@ void app_config_set_defaults(app_config_t *cfg)
     cfg->modbus.rx_pin = 16;
     cfg->modbus.de_pin = 4;
     cfg->modbus.baud = 9600;
+    cfg->modbus.parity = 0;
+    cfg->modbus.stop_bits = 1;
     cfg->modbus.timeout_ms = 300;
     cfg->modbus.retries = 3;
     cfg->modbus.default_slave_id = 1;
@@ -216,6 +218,8 @@ esp_err_t app_config_load(app_config_t *cfg)
     nvs_get_i32_into_int(h, "rx_pin", &cfg->modbus.rx_pin);
     nvs_get_i32_into_int(h, "de_pin", &cfg->modbus.de_pin);
     nvs_get_i32_into_int(h, "baud", &cfg->modbus.baud);
+    nvs_get_i32_into_int(h, "mb_parity", &cfg->modbus.parity);
+    nvs_get_i32_into_int(h, "mb_stop", &cfg->modbus.stop_bits);
     nvs_get_i32_into_int(h, "mb_to_ms", &cfg->modbus.timeout_ms);
     nvs_get_i32_into_int(h, "mb_retries", &cfg->modbus.retries);
     nvs_get_u8(h, "mb_slave", &cfg->modbus.default_slave_id);
@@ -233,6 +237,8 @@ esp_err_t app_config_load(app_config_t *cfg)
         cfg->hvac.gateway_type = HVAC_GATEWAY_DAIKIN_DTA116A51;
     } else if (gw == 3) {
         cfg->hvac.gateway_type = HVAC_GATEWAY_HITACHI_HCA_MB;
+    } else if (gw == 4) {
+        cfg->hvac.gateway_type = HVAC_GATEWAY_SAMSUNG_MIM_B19N;
     } else {
         cfg->hvac.gateway_type = HVAC_GATEWAY_LG_PMBUSB00A;
     }
@@ -290,6 +296,8 @@ esp_err_t app_config_save(const app_config_t *cfg)
     nvs_set_i32(h, "rx_pin", cfg->modbus.rx_pin);
     nvs_set_i32(h, "de_pin", cfg->modbus.de_pin);
     nvs_set_i32(h, "baud", cfg->modbus.baud);
+    nvs_set_i32(h, "mb_parity", cfg->modbus.parity);
+    nvs_set_i32(h, "mb_stop", cfg->modbus.stop_bits);
     nvs_set_i32(h, "mb_to_ms", cfg->modbus.timeout_ms);
     nvs_set_i32(h, "mb_retries", cfg->modbus.retries);
     nvs_set_u8(h, "mb_slave", cfg->modbus.default_slave_id);
@@ -328,7 +336,7 @@ esp_err_t app_config_to_json(const app_config_t *cfg, char *out, size_t out_len)
                             out_len,
                             &offset,
                             "{\"device_id\":\"%s\",\"log_level\":%d,\"wifi\":{\"ssid\":\"%s\"},"
-                            "\"modbus\":{\"uart\":%d,\"tx\":%d,\"rx\":%d,\"de\":%d,\"baud\":%d,\"timeout_ms\":%d,\"retries\":%d,\"default_slave\":%u,\"use_hw_rs485\":%s},"
+                            "\"modbus\":{\"uart\":%d,\"tx\":%d,\"rx\":%d,\"de\":%d,\"baud\":%d,\"parity\":%d,\"stop_bits\":%d,\"timeout_ms\":%d,\"retries\":%d,\"default_slave\":%u,\"use_hw_rs485\":%s},"
                             "\"hvac\":{\"gateway_type\":\"%s\",\"idu_address_base\":%d,\"poll_interval_ms\":%d,\"mode_rate_limit_ms\":%d,\"setpoint_min_tenths\":%d,\"setpoint_max_tenths\":%d,\"zones\":[",
                             cfg->system.device_id,
                             cfg->system.log_level,
@@ -338,6 +346,8 @@ esp_err_t app_config_to_json(const app_config_t *cfg, char *out, size_t out_len)
                             cfg->modbus.rx_pin,
                             cfg->modbus.de_pin,
                             cfg->modbus.baud,
+                            cfg->modbus.parity,
+                            cfg->modbus.stop_bits,
                             cfg->modbus.timeout_ms,
                             cfg->modbus.retries,
                             cfg->modbus.default_slave_id,
@@ -346,7 +356,11 @@ esp_err_t app_config_to_json(const app_config_t *cfg, char *out, size_t out_len)
                                 ? "midea_gw3_mod"
                                 : (cfg->hvac.gateway_type == HVAC_GATEWAY_DAIKIN_DTA116A51
                                        ? "daikin_dta116a51"
-                                       : (cfg->hvac.gateway_type == HVAC_GATEWAY_HITACHI_HCA_MB ? "hitachi_hca_mb" : "lg_pmbusb00a")),
+                                       : (cfg->hvac.gateway_type == HVAC_GATEWAY_HITACHI_HCA_MB
+                                              ? "hitachi_hca_mb"
+                                              : (cfg->hvac.gateway_type == HVAC_GATEWAY_SAMSUNG_MIM_B19N
+                                                     ? "samsung_mim_b19n"
+                                                     : "lg_pmbusb00a"))),
                             cfg->hvac.idu_address_base,
                             cfg->hvac.poll_interval_ms,
                             cfg->hvac.mode_rate_limit_ms,

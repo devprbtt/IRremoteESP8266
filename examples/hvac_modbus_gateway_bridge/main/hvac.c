@@ -68,6 +68,11 @@ static inline uint16_t hitachi_holding_addr(uint16_t n, uint16_t offset0)
     return (uint16_t)(2000U + (n * 32U) + offset0);
 }
 
+static inline uint16_t samsung_holding_addr(uint16_t n, uint16_t offset0)
+{
+    return (uint16_t)(50U + (n * 50U) + offset0);
+}
+
 static inline bool bit_get(const uint8_t *bytes, int bit)
 {
     return (bytes[bit / 8] & (1U << (bit % 8))) != 0;
@@ -246,6 +251,75 @@ static inline uint16_t generic_fan_to_hitachi(uint16_t gf)
     }
 }
 
+static inline int16_t samsung_mode_to_generic(uint16_t sm)
+{
+    switch (sm) {
+        case 1:
+            return 0; // cool
+        case 2:
+            return 1; // dry
+        case 3:
+            return 2; // fan
+        case 0:
+            return 3; // auto
+        case 4:
+        case 24:
+            return 4; // heat / heat storage
+        case 21:
+            return 0; // cool storage
+        default:
+            return 3;
+    }
+}
+
+static inline uint16_t generic_mode_to_samsung(uint16_t gm)
+{
+    switch (gm) {
+        case 0:
+            return 1; // cool
+        case 1:
+            return 2; // dry
+        case 2:
+            return 3; // fan
+        case 3:
+            return 0; // auto
+        case 4:
+            return 4; // heat
+        default:
+            return 0;
+    }
+}
+
+static inline uint8_t samsung_fan_to_generic(uint16_t sf)
+{
+    switch (sf) {
+        case 1:
+            return 1; // low
+        case 2:
+            return 2; // middle
+        case 3:
+            return 3; // high
+        case 0:
+        default:
+            return 4; // auto
+    }
+}
+
+static inline uint16_t generic_fan_to_samsung(uint16_t gf)
+{
+    switch (gf) {
+        case 1:
+            return 1; // low
+        case 2:
+            return 2; // middle
+        case 3:
+            return 3; // high
+        case 4:
+        default:
+            return 0; // auto
+    }
+}
+
 static void set_zone_error(hvac_zone_state_t *z, const char *err)
 {
     strlcpy(z->last_error, err, sizeof(z->last_error));
@@ -330,6 +404,25 @@ static esp_err_t refresh_one(hvac_manager_t *mgr, size_t idx)
         z->room_temp_tenths = (int16_t)((int16_t)regs[24] * 10);
         z->error_code = regs[19];
         z->alarm = (regs[22] == 3U) || (regs[19] != 0U);
+    } else if (mgr->cfg.hvac.gateway_type == HVAC_GATEWAY_SAMSUNG_MIM_B19N) {
+        // Samsung MIM-B19N/B19NT indoor unit map:
+        // addr = 50 + (UI * 50) + offset
+        uint16_t regs[32] = {0};
+        err = modbus_read_holding(mgr->modbus, z->slave_id, samsung_holding_addr(n, 0), 32, regs, 32);
+        if (err != ESP_OK) {
+            set_zone_error(z, "samsung read holding failed");
+            return err;
+        }
+
+        uint16_t comm = regs[0];
+        z->connected = ((comm & 0x0001U) != 0U) && ((comm & 0x0004U) != 0U);
+        z->power = (regs[2] != 0U);
+        z->mode = (uint8_t)samsung_mode_to_generic(regs[3]);
+        z->fan_speed = samsung_fan_to_generic(regs[4]);
+        z->setpoint_tenths = (int16_t)regs[8];
+        z->room_temp_tenths = (int16_t)regs[9];
+        z->error_code = regs[14];
+        z->alarm = ((comm & 0x0008U) != 0U) || (regs[14] != 0U);
     } else {
         err = modbus_read_coils(mgr->modbus, z->slave_id, get_coil_address(n, 1), 1, coil_bits, sizeof(coil_bits));
         if (err != ESP_OK) {
@@ -424,6 +517,21 @@ static esp_err_t write_verify_power(hvac_manager_t *mgr, hvac_zone_state_t *z, b
         }
         uint16_t verify = 0;
         err = modbus_read_holding(mgr->modbus, z->slave_id, hitachi_holding_addr(z->central_address, 9), 1, &verify, 1);
+        if (err != ESP_OK) {
+            return err;
+        }
+        return ((verify != 0U) == value) ? ESP_OK : ESP_ERR_INVALID_RESPONSE;
+    }
+
+    if (mgr->cfg.hvac.gateway_type == HVAC_GATEWAY_SAMSUNG_MIM_B19N) {
+        uint16_t addr = samsung_holding_addr(z->central_address, 2);
+        uint16_t raw = value ? 1U : 0U;
+        esp_err_t err = modbus_write_single_register(mgr->modbus, z->slave_id, addr, raw);
+        if (err != ESP_OK) {
+            return err;
+        }
+        uint16_t verify = 0;
+        err = modbus_read_holding(mgr->modbus, z->slave_id, addr, 1, &verify, 1);
         if (err != ESP_OK) {
             return err;
         }
@@ -611,6 +719,45 @@ static esp_err_t write_verify_holding(hvac_manager_t *mgr, hvac_zone_state_t *z,
         }
         int16_t verify_tenths = (int16_t)((int16_t)verify * 10);
         return (verify_tenths == (int16_t)(((int32_t)value + 5) / 10 * 10)) ? ESP_OK : ESP_ERR_INVALID_RESPONSE;
+    }
+
+    if (mgr->cfg.hvac.gateway_type == HVAC_GATEWAY_SAMSUNG_MIM_B19N) {
+        uint16_t n = z->central_address;
+        uint16_t write_offset = 0;
+        uint16_t raw = 0;
+
+        if (offset == 1) {
+            write_offset = 3;
+            raw = generic_mode_to_samsung(value);
+        } else if (offset == 2) {
+            write_offset = 4;
+            raw = generic_fan_to_samsung(value);
+        } else if (offset == 3) {
+            write_offset = 8;
+            raw = value;
+        } else {
+            return ESP_ERR_INVALID_ARG;
+        }
+
+        uint16_t addr = samsung_holding_addr(n, write_offset);
+        esp_err_t err = modbus_write_single_register(mgr->modbus, z->slave_id, addr, raw);
+        if (err != ESP_OK) {
+            return err;
+        }
+
+        uint16_t verify = 0;
+        err = modbus_read_holding(mgr->modbus, z->slave_id, addr, 1, &verify, 1);
+        if (err != ESP_OK) {
+            return err;
+        }
+
+        if (offset == 1) {
+            return (samsung_mode_to_generic(verify) == (int16_t)value) ? ESP_OK : ESP_ERR_INVALID_RESPONSE;
+        }
+        if (offset == 2) {
+            return (samsung_fan_to_generic(verify) == (uint8_t)value) ? ESP_OK : ESP_ERR_INVALID_RESPONSE;
+        }
+        return ((int16_t)verify == (int16_t)value) ? ESP_OK : ESP_ERR_INVALID_RESPONSE;
     }
 
     uint16_t addr = get_holding_address(z->central_address, offset);

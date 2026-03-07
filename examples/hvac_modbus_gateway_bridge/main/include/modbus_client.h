@@ -13,6 +13,8 @@ typedef struct {
     int rx_pin;
     int de_pin;
     int baud;
+    int parity;
+    int stop_bits;
     int timeout_ms;
     int retries;
     bool use_hw_rs485;

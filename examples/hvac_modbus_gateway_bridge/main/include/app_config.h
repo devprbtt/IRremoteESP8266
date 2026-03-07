@@ -22,6 +22,7 @@ typedef enum {
     HVAC_GATEWAY_MIDEA_GW3_MOD = 1,
     HVAC_GATEWAY_DAIKIN_DTA116A51 = 2,
     HVAC_GATEWAY_HITACHI_HCA_MB = 3,
+    HVAC_GATEWAY_SAMSUNG_MIM_B19N = 4,
 } hvac_gateway_type_t;
 
 typedef struct {
@@ -30,6 +31,8 @@ typedef struct {
     int rx_pin;
     int de_pin;
     int baud;
+    int parity;
+    int stop_bits;
     int timeout_ms;
     int retries;
     uint8_t default_slave_id;

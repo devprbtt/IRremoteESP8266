@@ -100,7 +100,12 @@ idf.py -p <PORT> spiffs-flash
 
 ## Default Runtime Parameters
 
-- Modbus: `9600 8N1`, slave `1`, timeout `300ms`, retries `3`
+- Modbus default: `9600 8N1`, slave `1`, timeout `300ms`, retries `3`
+- Per-gateway documented serial defaults:
+  - LG PMBUSB00A: `9600 8N1`
+  - Midea GW3-MOD: `9600 8N1`
+  - Samsung MIM-B19N / MIM-B19NT: `9600 8E1`
+  - Hitachi HC-A(8/16/64)MB: `9600 8N1`
 - UART2 pins: `TX=GPIO17`, `RX=GPIO16`, `DE=GPIO4`
 - Poll interval: `3000ms` per round-robin step
 - Zones: `1:0,1:1,1:2` (format `slave:central_address`)
@@ -115,11 +120,32 @@ Set the active mapping profile to match your gateway:
 - `midea_gw3_mod` (Midea GW3-MOD)
 - `daikin_dta116a51` (Daikin DTA116A51 / d3net Modbus map)
 - `hitachi_hca_mb` (Hitachi HC-A(8/16/64)MB indoor-unit map)
+- `samsung_mim_b19n` (Samsung MIM-B19N / MIM-B19NT indoor-unit map)
 
 Ways to set:
 
 - Web config: `/config` page, field `gateway_type`
-- Telnet: `CONFIG SET GATEWAY <lg|midea|daikin|hitachi>` then `CONFIG SAVE` and reboot
+- Telnet: `CONFIG SET GATEWAY <lg|midea|daikin|hitachi|samsung>` then `CONFIG SAVE` and reboot
+
+Serial settings:
+- `/config` now exposes `baud`, `parity`, and `stop_bits`
+- Selecting a gateway applies the documented default serial format for that gateway
+- These values remain user-overridable before saving
+
+Samsung notes:
+- Indoor unit PDU address formula in this profile: `50 + (UI * 50) + offset`
+- Supported core fields:
+  - `+0` communication status
+  - `+2` power
+  - `+3` mode
+  - `+4` fan speed
+  - `+8` set temperature (`C x10`)
+  - `+9` room temperature (`C x10`)
+  - `+14` integrated error code
+- Generic mode mapping:
+  - cool=`1`, dry=`2`, fan=`3`, auto=`0`, heat=`4`
+- Generic fan mapping:
+  - low=`1`, mid=`2`, high=`3`, auto=`0`
 
 ## Wi-Fi Behavior
 

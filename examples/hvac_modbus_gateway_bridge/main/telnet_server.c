@@ -205,7 +205,7 @@ static bool handle_command(telnet_server_t *srv, int fd, char *line)
               "\"read <idx>\",\"set <idx> <power|mode|fan|setpoint> <value>\","
               "\"config get\",\"config set wifi <ssid> <pass>\",\"config set zones <csv>\","
               "\"config set poll_ms <ms>\",\"config set idu_base <0|1>\",\"config set slave <1..247>\","
-              "\"config set gateway <lg|midea|daikin|hitachi>\",\"config save\","
+              "\"config set gateway <lg|midea|daikin|hitachi|samsung>\",\"config save\","
               "\"monitor status|on|off|clear\",\"reboot\",\"quit\"]}\r\n");
         return true;
     }
@@ -411,11 +411,15 @@ static bool handle_command(telnet_server_t *srv, int fd, char *line)
                     srv->cfg->hvac.gateway_type = HVAC_GATEWAY_HITACHI_HCA_MB;
                     srv->cfg->hvac.idu_address_base = 0;
                     sendf(fd, "{\"ok\":true,\"msg\":\"gateway set to hitachi_hca_mb (reboot to apply)\"}\r\n");
+                } else if (strcasecmp(val, "samsung") == 0 || strcasecmp(val, "samsung_mim_b19n") == 0) {
+                    srv->cfg->hvac.gateway_type = HVAC_GATEWAY_SAMSUNG_MIM_B19N;
+                    srv->cfg->hvac.idu_address_base = 0;
+                    sendf(fd, "{\"ok\":true,\"msg\":\"gateway set to samsung_mim_b19n (reboot to apply)\"}\r\n");
                 } else if (strcasecmp(val, "lg") == 0 || strcasecmp(val, "lg_pmbusb00a") == 0) {
                     srv->cfg->hvac.gateway_type = HVAC_GATEWAY_LG_PMBUSB00A;
                     sendf(fd, "{\"ok\":true,\"msg\":\"gateway set to lg_pmbusb00a (reboot to apply)\"}\r\n");
                 } else {
-                    sendf(fd, "{\"ok\":false,\"error\":\"gateway must be lg, midea, daikin, or hitachi\"}\r\n");
+                    sendf(fd, "{\"ok\":false,\"error\":\"gateway must be lg, midea, daikin, hitachi, or samsung\"}\r\n");
                 }
                 return true;
             }

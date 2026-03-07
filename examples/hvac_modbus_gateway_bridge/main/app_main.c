@@ -44,6 +44,8 @@ void app_main(void)
         .rx_pin = cfg.modbus.rx_pin,
         .de_pin = cfg.modbus.de_pin,
         .baud = cfg.modbus.baud,
+        .parity = cfg.modbus.parity,
+        .stop_bits = cfg.modbus.stop_bits,
         .timeout_ms = cfg.modbus.timeout_ms,
         .retries = cfg.modbus.retries,
         .use_hw_rs485 = cfg.modbus.use_hw_rs485,

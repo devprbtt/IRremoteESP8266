@@ -31,6 +31,30 @@ static int interframe_delay_us(int baud)
     return us;
 }
 
+static uart_parity_t parity_from_cfg(int parity)
+{
+    switch (parity) {
+        case 1:
+            return UART_PARITY_EVEN;
+        case 2:
+            return UART_PARITY_ODD;
+        case 0:
+        default:
+            return UART_PARITY_DISABLE;
+    }
+}
+
+static uart_stop_bits_t stop_bits_from_cfg(int stop_bits)
+{
+    switch (stop_bits) {
+        case 2:
+            return UART_STOP_BITS_2;
+        case 1:
+        default:
+            return UART_STOP_BITS_1;
+    }
+}
+
 static esp_err_t uart_read_exact(uart_port_t uart, uint8_t *buf, size_t want, int timeout_ms)
 {
     size_t got = 0;
@@ -184,8 +208,8 @@ esp_err_t modbus_client_init(modbus_client_t **out_client, const modbus_client_c
     uart_config_t ucfg = {
         .baud_rate = cfg->baud,
         .data_bits = UART_DATA_8_BITS,
-        .parity = UART_PARITY_DISABLE,
-        .stop_bits = UART_STOP_BITS_1,
+        .parity = parity_from_cfg(cfg->parity),
+        .stop_bits = stop_bits_from_cfg(cfg->stop_bits),
         .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
         .source_clk = UART_SCLK_DEFAULT,
     };
@@ -234,7 +258,7 @@ esp_err_t modbus_client_init(modbus_client_t **out_client, const modbus_client_c
     }
 
     *out_client = c;
-    ESP_LOGI(TAG, "modbus client ready uart=%d baud=%d", cfg->uart_num, cfg->baud);
+    ESP_LOGI(TAG, "modbus client ready uart=%d baud=%d parity=%d stop_bits=%d", cfg->uart_num, cfg->baud, cfg->parity, cfg->stop_bits);
     return ESP_OK;
 
 fail:

@@ -40,6 +40,9 @@ static const char *gateway_type_to_string(hvac_gateway_type_t t)
     if (t == HVAC_GATEWAY_HITACHI_HCA_MB) {
         return "hitachi_hca_mb";
     }
+    if (t == HVAC_GATEWAY_SAMSUNG_MIM_B19N) {
+        return "samsung_mim_b19n";
+    }
     return "lg_pmbusb00a";
 }
 
@@ -374,6 +377,11 @@ static esp_err_t handle_config_save(httpd_req_t *req)
             if (s->cfg->hvac.idu_address_base != 0) {
                 s->cfg->hvac.idu_address_base = 0;
             }
+        } else if (strcmp(gateway_type->valuestring, "samsung_mim_b19n") == 0 || strcmp(gateway_type->valuestring, "samsung") == 0) {
+            s->cfg->hvac.gateway_type = HVAC_GATEWAY_SAMSUNG_MIM_B19N;
+            if (s->cfg->hvac.idu_address_base != 0) {
+                s->cfg->hvac.idu_address_base = 0;
+            }
         } else {
             s->cfg->hvac.gateway_type = HVAC_GATEWAY_LG_PMBUSB00A;
         }
@@ -388,6 +396,8 @@ static esp_err_t handle_config_save(httpd_req_t *req)
     apply_optional_int(json, "rx_pin", &s->cfg->modbus.rx_pin);
     apply_optional_int(json, "de_pin", &s->cfg->modbus.de_pin);
     apply_optional_int(json, "baud", &s->cfg->modbus.baud);
+    apply_optional_int(json, "parity", &s->cfg->modbus.parity);
+    apply_optional_int(json, "stop_bits", &s->cfg->modbus.stop_bits);
     apply_optional_int(json, "timeout_ms", &s->cfg->modbus.timeout_ms);
     apply_optional_int(json, "retries", &s->cfg->modbus.retries);
     apply_optional_int(json, "setpoint_min_tenths", &s->cfg->hvac.setpoint_min_tenths);
@@ -416,6 +426,12 @@ static esp_err_t handle_config_save(httpd_req_t *req)
     }
     if (s->cfg->modbus.default_slave_id < 1 || s->cfg->modbus.default_slave_id > 247) {
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "default_slave_id must be 1..247");
+    }
+    if (s->cfg->modbus.parity < 0 || s->cfg->modbus.parity > 2) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "parity must be 0:none, 1:even, or 2:odd");
+    }
+    if (s->cfg->modbus.stop_bits != 1 && s->cfg->modbus.stop_bits != 2) {
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "stop_bits must be 1 or 2");
     }
 
     if (app_config_save(s->cfg) != ESP_OK) {
