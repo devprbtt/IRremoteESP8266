@@ -1,96 +1,202 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
-  <meta charset='utf-8'>
-  <meta name='viewport' content='width=device-width,initial-scale=1'>
-  <title>HVAC Gateway Monitor</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>HVAC Gateway - Monitor</title>
   <style>
-    body { font-family: Arial, sans-serif; margin: 0; background: #101319; color: #e6edf3; }
-    .wrap { max-width: 980px; margin: 0 auto; padding: 14px; }
-    .card { background: #171b22; border: 1px solid #293042; border-radius: 8px; padding: 10px; margin: 10px 0; }
-    nav { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
-    a { color: #101319; background: #d0d7de; padding: 6px 9px; border-radius: 6px; text-decoration: none; font-weight: 600; }
-    input, select, textarea, button {
-      width: 100%;
-      box-sizing: border-box;
-      margin: 4px 0;
-      padding: 7px;
-      border-radius: 6px;
-      border: 1px solid #3a4458;
-      background: #0f141b;
-      color: #e6edf3;
+    :root {
+      --bg: #0d1117;
+      --card: #161b22;
+      --border: #30363d;
+      --text: #c9d1d9;
+      --text-muted: #8b949e;
+      --accent: #58a6ff;
+      --accent-hover: #1f6feb;
+      --success: #238636;
+      --input-bg: #010409;
+      --term-bg: #000;
+      --term-text: #39ff14;
     }
-    button { cursor: pointer; background: #2ea043; border: 0; color: #fff; font-weight: 600; }
-    button.secondary { background: #1f6feb; }
-    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-    .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    .wrap {
+      max-width: 1000px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    nav {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 24px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+      overflow-x: auto;
+    }
+    nav a {
+      color: var(--text);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 500;
+      padding: 6px 12px;
+      border-radius: 6px;
+      transition: background 0.2s;
+      white-space: nowrap;
+    }
+    nav a:hover {
+      background: var(--border);
+    }
+    nav a.active {
+      color: var(--accent);
+      background: rgba(88, 166, 255, 0.1);
+    }
+    h1 {
+      font-size: 24px;
+      font-weight: 600;
+      margin: 0 0 20px;
+    }
+    h2 {
+      font-size: 16px;
+      font-weight: 600;
+      margin: 0 0 16px;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 8px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 24px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    label {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-muted);
+    }
+    input, select {
+      background: var(--input-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      padding: 8px 12px;
+      font-size: 14px;
+    }
+    button {
+      cursor: pointer;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 16px;
+      font-size: 14px;
+      font-weight: 600;
+      transition: 0.2s;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    .btn-primary { background: var(--success); color: #fff; border-color: rgba(240, 246, 252, 0.1); }
+    .btn-alt { background: #21262d; color: var(--accent); border-color: var(--border); }
+    .btn-alt:hover { background: #30363d; border-color: #8b949e; }
     .term {
-      background: #000;
-      color: #00ff6a;
-      height: 260px;
-      overflow: auto;
-      padding: 8px;
+      background: var(--term-bg);
+      color: var(--term-text);
+      height: 300px;
+      overflow-y: auto;
+      padding: 12px;
       border-radius: 6px;
-      font-family: Consolas, "Courier New", monospace;
-      white-space: pre-wrap;
-      word-break: break-word;
+      font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
+      font-size: 13px;
+      line-height: 1.4;
+      border: 1px solid var(--border);
     }
-    .hint { color: #9fb1c7; font-size: 12px; }
-    pre { background: #0f141b; border: 1px solid #3a4458; border-radius: 6px; padding: 8px; white-space: pre-wrap; word-break: break-word; }
-    @media (max-width: 860px) {
-      .row, .row3 { grid-template-columns: 1fr; }
+    .hint { font-size: 12px; color: var(--text-muted); margin-bottom: 12px; }
+    pre {
+      margin-top: 16px;
+      padding: 12px;
+      background: var(--input-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-family: monospace;
+      font-size: 12px;
+      color: #79c0ff;
+      white-space: pre-wrap;
+    }
+    .actions { display: flex; gap: 12px; }
+    @media (max-width: 600px) {
+      .wrap { padding: 12px; }
+      .grid { grid-template-columns: 1fr; }
+      .actions { flex-direction: column; }
     }
   </style>
 </head>
 <body>
-  <div class='wrap'>
+  <div class="wrap">
     <nav>
-      <a href='/'>Home</a>
-      <a href='/config'>Config</a>
-      <a href='/monitor'>Monitor</a>
-      <a href='/firmware'>Firmware</a>
+      <a href="/">Dashboard</a>
+      <a href="/config">Configuration</a>
+      <a href="/monitor" class="active">Zone Monitor</a>
+      <a href="/firmware">Firmware Update</a>
     </nav>
+    <h1>HVAC Control & Monitor</h1>
 
-    <h2>HVAC Control + Telnet Monitor</h2>
-
-    <div class='card'>
-      <h3>Gateway-aware HVAC control</h3>
-      <div class='hint' id='gwHint'>Loading gateway profile...</div>
-      <div class='row3'>
-        <div>
-          <label for='zoneSel'>Online zone</label>
-          <select id='zoneSel'></select>
+    <div class="card">
+      <h2>HVAC Command</h2>
+      <div id="gwHint" class="hint">Loading gateway profile...</div>
+      <div class="grid">
+        <div class="field">
+          <label for="zoneSel">Zone</label>
+          <select id="zoneSel"></select>
         </div>
-        <div>
-          <label for='fieldSel'>Field</label>
-          <select id='fieldSel' onchange='renderFieldInput()'>
-            <option value='power'>power</option>
-            <option value='mode'>mode</option>
-            <option value='fan'>fan</option>
-            <option value='setpoint'>setpoint</option>
+        <div class="field">
+          <label for="fieldSel">Field</label>
+          <select id="fieldSel" onchange="renderFieldInput()">
+            <option value="power">power</option>
+            <option value="mode">mode</option>
+            <option value="fan">fan</option>
+            <option value="setpoint">setpoint</option>
           </select>
         </div>
-        <div id='valueWrap'>
-          <label for='valueSel'>Value</label>
-          <select id='valueSel'></select>
-          <input id='valueNum' style='display:none' type='number' step='0.1' min='16' max='30'>
+        <div class="field" id="valueWrap">
+          <label for="valueSel">Value</label>
+          <select id="valueSel"></select>
+          <input id="valueNum" style="display:none" type="number" step="0.1">
         </div>
       </div>
-      <div class='row'>
-        <button onclick='sendCmd()'>Send Command</button>
-        <button class='secondary' onclick='readZone()'>Read Zone</button>
+      <div class="actions">
+        <button class="btn-primary" onclick="sendCmd()">Send Command</button>
+        <button class="btn-alt" onclick="readZone()">Force Read</button>
       </div>
-      <pre id='cmdOut'>Ready</pre>
+      <pre id="cmdOut">Ready</pre>
     </div>
 
-    <div class='card'>
-      <h3>Telnet Monitor</h3>
-      <div class='row'>
-        <button id='toggleBtn' class='secondary' onclick='toggleMon()'>Toggle</button>
-        <button onclick='clearMon()'>Clear</button>
+    <div class="card">
+      <h2>Live System Logs</h2>
+      <div class="actions" style="margin-bottom: 12px;">
+        <button id="toggleBtn" class="btn-alt" onclick="toggleMon()">Disable</button>
+        <button class="btn-alt" onclick="clearMon()">Clear</button>
       </div>
-      <p id='monStatus'>...</p>
-      <div id='term' class='term'></div>
+      <div class="hint" id="monStatus">Monitor: enabled</div>
+      <div id="term" class="term"></div>
     </div>
   </div>
 
@@ -105,161 +211,93 @@
     let hvacMeta = null;
 
     async function refreshMeta() {
-      hvacMeta = await J('/api/hvac/meta');
-      const gw = hvacMeta.gateway_type || 'unknown';
-      gwHint.textContent = `Gateway profile: ${gw}. Only online zones are listed.`;
-
-      zoneSel.innerHTML = '';
-      const zones = hvacMeta.online_zones || [];
-      if (!zones.length) {
-        const o = document.createElement('option');
-        o.value = '';
-        o.text = 'No online zones';
-        zoneSel.appendChild(o);
-      } else {
-        for (const z of zones) {
+      try {
+        hvacMeta = await J('/api/hvac/meta');
+        document.getElementById('gwHint').textContent = `Gateway profile: ${hvacMeta.gateway_type || 'unknown'}. Only online zones are listed.`;
+        const zones = hvacMeta.online_zones || [];
+        const sel = document.getElementById('zoneSel');
+        const currentZone = sel.value;
+        sel.innerHTML = zones.length ? '' : '<option value="">No online zones</option>';
+        zones.forEach(z => {
           const o = document.createElement('option');
           o.value = z.index;
-          o.text = `idx ${z.index} (slave ${z.slave}, ca ${z.central_address})`;
-          zoneSel.appendChild(o);
-        }
-      }
+          o.text = `Zone ${z.index} (IDU ${z.central_address})`;
+          sel.appendChild(o);
+        });
+        if (currentZone) sel.value = currentZone;
 
-      const min = (hvacMeta.setpoint_min_tenths || 160) / 10;
-      const max = (hvacMeta.setpoint_max_tenths || 300) / 10;
-      valueNum.min = min;
-      valueNum.max = max;
-      valueNum.value = min;
-
-      renderFieldInput();
+        document.getElementById('valueNum').min = (hvacMeta.setpoint_min_tenths || 160) / 10;
+        document.getElementById('valueNum').max = (hvacMeta.setpoint_max_tenths || 300) / 10;
+        renderFieldInput();
+      } catch(e) {}
     }
 
     function renderFieldInput() {
-      const field = fieldSel.value;
-      valueSel.style.display = '';
-      valueNum.style.display = 'none';
-      valueSel.innerHTML = '';
+      const field = document.getElementById('fieldSel').value;
+      const vSel = document.getElementById('valueSel');
+      const vNum = document.getElementById('valueNum');
+      vSel.style.display = 'none';
+      vNum.style.display = 'none';
 
       if (field === 'power') {
-        const opts = [{v:1,t:'on (1)'},{v:0,t:'off (0)'}];
-        for (const it of opts) {
-          const o = document.createElement('option');
-          o.value = it.v;
-          o.text = it.t;
-          valueSel.appendChild(o);
-        }
-        return;
+        vSel.style.display = 'block';
+        vSel.innerHTML = '<option value="1">On</option><option value="0">Off</option>';
+      } else if (field === 'mode') {
+        vSel.style.display = 'block';
+        vSel.innerHTML = (hvacMeta?.modes || []).map(m => `<option value="${m.value}">${m.label}</option>`).join('');
+      } else if (field === 'fan') {
+        vSel.style.display = 'block';
+        vSel.innerHTML = (hvacMeta?.fans || []).map(f => `<option value="${f.value}">${f.label}</option>`).join('');
+      } else {
+        vNum.style.display = 'block';
       }
-
-      if (field === 'mode') {
-        for (const m of (hvacMeta?.modes || [])) {
-          const o = document.createElement('option');
-          o.value = m.value;
-          o.text = `${m.label} (${m.value})`;
-          valueSel.appendChild(o);
-        }
-        return;
-      }
-
-      if (field === 'fan') {
-        for (const f of (hvacMeta?.fans || [])) {
-          const o = document.createElement('option');
-          o.value = f.value;
-          o.text = `${f.label} (${f.value})`;
-          valueSel.appendChild(o);
-        }
-        return;
-      }
-
-      valueSel.style.display = 'none';
-      valueNum.style.display = '';
     }
 
     async function sendCmd() {
-      if (!zoneSel.value) {
-        cmdOut.textContent = 'No online zone available';
-        return;
-      }
-      const field = fieldSel.value;
-      const value = (field === 'setpoint') ? String(valueNum.value) : String(valueSel.value);
-      const r = await P('/api/hvac/cmd', { index: +zoneSel.value, field, value });
-      cmdOut.textContent = JSON.stringify(r, null, 2);
-      await refreshMeta();
+      const z = document.getElementById('zoneSel').value;
+      if (!z) return;
+      const field = document.getElementById('fieldSel').value;
+      const value = field === 'setpoint' ? document.getElementById('valueNum').value : document.getElementById('valueSel').value;
+      const r = await P('/api/hvac/cmd', { index: +z, field, value: String(value) });
+      document.getElementById('cmdOut').textContent = JSON.stringify(r, null, 2);
     }
 
     async function readZone() {
-      if (!zoneSel.value) {
-        cmdOut.textContent = 'No online zone available';
-        return;
-      }
-      const r = await P('/api/hvac/read', { index: +zoneSel.value });
-      cmdOut.textContent = JSON.stringify(r, null, 2);
-      await refreshMeta();
+      const z = document.getElementById('zoneSel').value;
+      if (!z) return;
+      const r = await P('/api/hvac/read', { index: +z });
+      document.getElementById('cmdOut').textContent = JSON.stringify(r, null, 2);
     }
 
     let logSeq = 0;
     let monEnabled = true;
-    let pollBusy = false;
-    let pollTimer = 0;
-    let pollDelay = 2000;
-    let pollFailCount = 0;
-
-    function setLabel(extra = '') {
-      document.getElementById('monStatus').innerText =
-        'Monitor: ' + (monEnabled ? 'enabled' : 'disabled') + (extra ? (' - ' + extra) : '');
-      document.getElementById('toggleBtn').innerText = monEnabled ? 'Disable' : 'Enable';
-    }
-
-    function schedulePoll(ms) {
-      if (pollTimer) clearTimeout(pollTimer);
-      pollTimer = setTimeout(pollLogs, ms);
-    }
-
-    async function loadMon() {
-      const s = await J('/api/monitor');
-      monEnabled = !!s.enabled;
-      setLabel();
-    }
 
     async function toggleMon() {
-      await P('/api/monitor/toggle', { enabled: !monEnabled });
-      await loadMon();
+      monEnabled = !monEnabled;
+      await P('/api/monitor/toggle', { enabled: monEnabled });
+      document.getElementById('monStatus').textContent = `Monitor: ${monEnabled ? 'enabled' : 'disabled'}`;
+      document.getElementById('toggleBtn').textContent = monEnabled ? 'Disable' : 'Enable';
     }
 
-    async function clearMon() {
-      await fetch('/api/monitor/clear', { method: 'POST' });
-      document.getElementById('term').innerText = '';
+    function clearMon() {
+      fetch('/api/monitor/clear', { method: 'POST' });
+      document.getElementById('term').textContent = '';
       logSeq = 0;
     }
 
     async function pollLogs() {
-      if (pollBusy) return;
-      pollBusy = true;
       try {
         const r = await J('/api/logs?since=' + logSeq);
-        pollFailCount = 0;
-        pollDelay = 2000;
         logSeq = r.latest || logSeq;
-
         const term = document.getElementById('term');
-        for (const ln of (r.lines || [])) {
-          term.innerText += ln.text;
-        }
-        term.scrollTop = term.scrollHeight;
-        setLabel();
-      } catch (_e) {
-        pollFailCount++;
-        pollDelay = Math.min(8000, 2000 + pollFailCount * 1000);
-        setLabel('reconnecting...');
-      } finally {
-        pollBusy = false;
-        schedulePoll(pollDelay);
-      }
+        (r.lines || []).forEach(ln => { term.textContent += ln.text; });
+        if (r.lines?.length) term.scrollTop = term.scrollHeight;
+      } catch (e) {}
+      setTimeout(pollLogs, 2000);
     }
 
-    loadMon().catch(() => {});
-    refreshMeta().catch(() => {});
-    setInterval(() => refreshMeta().catch(() => {}), 3000);
+    refreshMeta();
+    setInterval(refreshMeta, 5000);
     pollLogs();
   </script>
 </body>
