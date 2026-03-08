@@ -238,6 +238,11 @@ void writeStateJson(JsonObject state, const String &id, const HvacRuntimeState &
 void handleDinplugPage();
 void handleDinplugSave();
 void handleDinplugTest();
+void handleApiStatus();
+void handleApiMeta();
+void handleApiConfigSave();
+void handleFilesystemUpdate();
+void handleFilesystemUpload();
 bool dinActionUsesValue(const String &action);
 String dinToggleModeOptionsHtml(const String &selected);
 String dinKeypadsCsv(const HvacConfig &h);
@@ -1626,6 +1631,15 @@ String pageHeader(const String &title) {
 
 String pageFooter() { return "</div></body></html>"; }
 
+bool streamSpiffsFile(const char *path, const char *contentType) {
+  if (!SPIFFS.exists(path)) return false;
+  File f = SPIFFS.open(path, FILE_READ);
+  if (!f) return false;
+  web.streamFile(f, contentType);
+  f.close();
+  return true;
+}
+
 // ---- Web Handlers ----
 
 void handleHome() {
@@ -2585,10 +2599,136 @@ void handleFirmwareUpload() {
   }
 }
 
+void handleFilesystemUpdate() {
+  if (!checkAuth()) { requestAuth(); return; }
+  bool ok = !Update.hasError();
+  String html = "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Filesystem Update</title>";
+  html += "<style>body{font-family:Arial,sans-serif;padding:24px;max-width:720px;margin:auto;}</style></head><body><h3>";
+  html += ok ? "Filesystem updated. Rebooting..." : "Filesystem update failed.";
+  html += "</h3></body></html>";
+  web.send(ok ? 200 : 500, "text/html", html);
+  if (ok) {
+    delay(500);
+    ESP.restart();
+  }
+}
+
+void handleFilesystemUpload() {
+  if (!checkAuth()) { requestAuth(); return; }
+  HTTPUpload &up = web.upload();
+  if (up.status == UPLOAD_FILE_START) {
+    Serial.printf("fs-web: start %s\n", up.filename.c_str());
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_SPIFFS)) {
+      Update.printError(Serial);
+    }
+  } else if (up.status == UPLOAD_FILE_WRITE) {
+    if (Update.write(up.buf, up.currentSize) != up.currentSize) {
+      Update.printError(Serial);
+    }
+  } else if (up.status == UPLOAD_FILE_END) {
+    if (Update.end(true)) {
+      Serial.printf("fs-web: success %u bytes\n", up.totalSize);
+    } else {
+      Update.printError(Serial);
+    }
+  } else if (up.status == UPLOAD_FILE_ABORTED) {
+    Update.abort();
+    Serial.println("fs-web: aborted");
+  }
+}
+
 void handleApiConfig() {
   if (!checkAuth()) { requestAuth(); return; }
   String json = configToJsonString();
   web.send(200, "application/json", json);
+}
+
+void handleApiStatus() {
+  if (!checkAuth()) { requestAuth(); return; }
+  JsonDocument doc;
+  doc["network_mode"] = networkModeString();
+  doc["ip"] = networkLocalIp().toString();
+  doc["hostname"] = config.hostname.length() ? config.hostname : kDefaultHostname;
+  doc["telnet_port"] = config.telnetPort;
+  doc["wireguard_enabled"] = config.wg.enabled;
+  doc["wireguard_connected"] = wgConnected;
+  doc["wireguard_ip"] = config.wg.localIp.toString();
+  doc["dinplug_status"] = dinplugConnectionStatus();
+  doc["emitter_count"] = config.emitterCount;
+  doc["hvac_count"] = config.hvacCount;
+  doc["ir_receiver_enabled"] = config.irReceiver.enabled;
+  doc["ir_receiver_gpio"] = config.irReceiver.gpio;
+  doc["temp_sensors_enabled"] = config.tempSensors.enabled;
+  doc["temp_sensor_count"] = tempSensorCount;
+  doc["ethernet_enabled"] = config.eth.enabled;
+  String out;
+  serializeJson(doc, out);
+  web.send(200, "application/json", out);
+}
+
+void handleApiMeta() {
+  if (!checkAuth()) { requestAuth(); return; }
+  JsonDocument doc;
+  JsonArray protocols = doc["protocols"].to<JsonArray>();
+  protocols.add("CUSTOM");
+  for (uint16_t i = 0; i <= kLastDecodeType; i++) {
+    decode_type_t proto = static_cast<decode_type_t>(i);
+    if (!IRac::isProtocolSupported(proto)) continue;
+    protocols.add(typeToString(proto));
+  }
+
+  JsonArray gpioOptions = doc["gpio_options"].to<JsonArray>();
+  const uint8_t gpios[] = {2,4,5,12,13,14,15,16,17,18,19,21,22,23,25,26,27,32,33};
+  for (uint8_t gpio : gpios) gpioOptions.add(gpio);
+
+  JsonArray dinActions = doc["din_actions"].to<JsonArray>();
+  const char *actions[] = {"none","temp_up","temp_down","set_temp","power_on","power_off","toggle_power","mode_heat","mode_cool","mode_fan","mode_auto","mode_off"};
+  for (const char *action : actions) dinActions.add(action);
+
+  JsonArray toggleModes = doc["toggle_modes"].to<JsonArray>();
+  const char *modes[] = {"auto","cool","heat","dry","fan"};
+  for (const char *mode : modes) toggleModes.add(mode);
+
+  doc["max_custom_commands"] = kMaxCustomCommands;
+  doc["max_dinplug_buttons"] = kMaxDinplugButtons;
+  doc["max_temp_sensors"] = kMaxTempSensors;
+  doc["max_emitters"] = kMaxEmitters;
+  doc["max_hvacs"] = kMaxHvacs;
+
+  String out;
+  serializeJson(doc, out);
+  web.send(200, "application/json", out);
+}
+
+void handleApiConfigSave() {
+  if (!checkAuth()) { requestAuth(); return; }
+  String body = web.arg("plain");
+  if (!body.length()) {
+    web.send(400, "application/json", "{\"ok\":false,\"error\":\"missing_body\"}");
+    return;
+  }
+
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, body);
+  if (err) {
+    String out = "{\"ok\":false,\"error\":\"invalid_json\",\"detail\":\"";
+    out += err.c_str();
+    out += "\"}";
+    web.send(400, "application/json", out);
+    return;
+  }
+
+  File f = SPIFFS.open(kConfigPath, FILE_WRITE);
+  if (!f) {
+    web.send(500, "application/json", "{\"ok\":false,\"error\":\"config_write_failed\"}");
+    return;
+  }
+  f.print(body);
+  f.close();
+
+  web.send(200, "application/json", "{\"ok\":true,\"rebooting\":true}");
+  delay(300);
+  ESP.restart();
 }
 
 void handleWifiScan() {
@@ -3098,30 +3238,55 @@ void handleCaptiveRedirect() {
 }
 
 void setupWeb() {
-  web.on("/", handleHome);
-  web.on("/config", handleConfigPage);
+  web.on("/", HTTP_GET, []() {
+    if (!checkAuth()) { requestAuth(); return; }
+    if (!streamSpiffsFile("/index.html", "text/html; charset=utf-8")) handleHome();
+  });
+  web.on("/config", HTTP_GET, []() {
+    if (!checkAuth()) { requestAuth(); return; }
+    if (!streamSpiffsFile("/config.html", "text/html; charset=utf-8")) handleConfigPage();
+  });
   web.on("/config/save", HTTP_POST, handleConfigSave);
-  web.on("/emitters", handleEmittersPage);
+  web.on("/emitters", HTTP_GET, []() {
+    if (!checkAuth()) { requestAuth(); return; }
+    if (!streamSpiffsFile("/emitters.html", "text/html; charset=utf-8")) handleEmittersPage();
+  });
   web.on("/emitters/add", HTTP_POST, handleEmittersAdd);
   web.on("/emitters/delete", HTTP_GET, handleEmittersDelete);
-  web.on("/hvacs", handleHvacsPage);
+  web.on("/hvacs", HTTP_GET, []() {
+    if (!checkAuth()) { requestAuth(); return; }
+    if (!streamSpiffsFile("/hvacs.html", "text/html; charset=utf-8")) handleHvacsPage();
+  });
   web.on("/hvacs/add", HTTP_POST, handleHvacsAdd);
   web.on("/hvacs/clone", HTTP_POST, handleHvacsClone);
-  web.on("/hvacs/test", HTTP_GET, handleHvacTestPage);
+  web.on("/hvacs/test", HTTP_GET, []() {
+    if (!checkAuth()) { requestAuth(); return; }
+    if (!streamSpiffsFile("/hvacs_test.html", "text/html; charset=utf-8")) handleHvacTestPage();
+  });
   web.on("/hvacs/test", HTTP_POST, handleHvacTest);
   web.on("/hvacs/update", HTTP_POST, handleHvacsUpdate);
   web.on("/hvacs/delete", HTTP_GET, handleHvacsDelete);
-  web.on("/dinplug", handleDinplugPage);
+  web.on("/dinplug", HTTP_GET, []() {
+    if (!checkAuth()) { requestAuth(); return; }
+    if (!streamSpiffsFile("/dinplug.html", "text/html; charset=utf-8")) handleDinplugPage();
+  });
   web.on("/dinplug/save", HTTP_POST, handleDinplugSave);
   web.on("/dinplug/test", HTTP_POST, handleDinplugTest);
   web.on("/raw/test", HTTP_POST, handleRawTest);
-  web.on("/monitor", HTTP_GET, handleMonitorPage);
+  web.on("/monitor", HTTP_GET, []() {
+    if (!checkAuth()) { requestAuth(); return; }
+    if (!streamSpiffsFile("/monitor.html", "text/html; charset=utf-8")) handleMonitorPage();
+  });
   web.on("/api/monitor", HTTP_GET, handleApiMonitor);
   web.on("/monitor/clear", HTTP_POST, handleMonitorClear);
   web.on("/monitor/toggle", HTTP_POST, handleMonitorToggle);
   web.on("/api/ir/learn/start", HTTP_POST, handleIrLearnStart);
   web.on("/api/ir/learn/poll", HTTP_GET, handleIrLearnPoll);
   web.on("/api/ir/learn/cancel", HTTP_POST, handleIrLearnCancel);
+  web.on("/system", HTTP_GET, []() {
+    if (!checkAuth()) { requestAuth(); return; }
+    if (!streamSpiffsFile("/system.html", "text/html; charset=utf-8")) handleFirmwarePage();
+  });
 
   // Captive portal & connectivity check endpoints.
   web.on("/generate_204", HTTP_ANY, handleCaptive204);
@@ -3136,11 +3301,21 @@ void setupWeb() {
   web.on("/library/test/success.html", HTTP_ANY, handleCaptiveRedirect);
 
   web.on("/config/download", HTTP_GET, handleConfigDownload);
-  web.on("/config/upload", HTTP_GET, handleConfigUploadPage);
+  web.on("/config/upload", HTTP_GET, []() {
+    if (!checkAuth()) { requestAuth(); return; }
+    if (!streamSpiffsFile("/config_upload.html", "text/html; charset=utf-8")) handleConfigUploadPage();
+  });
   web.on("/config/upload", HTTP_POST, handleConfigUploadDone, handleConfigUpload);
-  web.on("/firmware", HTTP_GET, handleFirmwarePage);
+  web.on("/firmware", HTTP_GET, []() {
+    if (!checkAuth()) { requestAuth(); return; }
+    if (!streamSpiffsFile("/firmware.html", "text/html; charset=utf-8")) handleFirmwarePage();
+  });
   web.on("/firmware/update", HTTP_POST, handleFirmwareUpdate, handleFirmwareUpload);
+  web.on("/spiffs/update", HTTP_POST, handleFilesystemUpdate, handleFilesystemUpload);
   web.on("/api/config", HTTP_GET, handleApiConfig);
+  web.on("/api/config/save", HTTP_POST, handleApiConfigSave);
+  web.on("/api/status", HTTP_GET, handleApiStatus);
+  web.on("/api/meta", HTTP_GET, handleApiMeta);
   web.on("/api/wifi/scan", HTTP_GET, handleWifiScan);
   web.onNotFound([]() {
     if (isApPortalMode()) {

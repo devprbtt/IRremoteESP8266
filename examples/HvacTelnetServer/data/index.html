@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+  <meta name="theme-color" content="#0a0e14">
+  <title>IR HVAC Telnet</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    :root {
+      --bg: #0a0e14;
+      --surface: #131920;
+      --surface-elevated: #1a2029;
+      --border: #252d3a;
+      --text: #f0f4f8;
+      --text-muted: #7a8a9d;
+      --primary: #3b82f6;
+      --success: #22c55e;
+      --radius: 14px;
+      --radius-sm: 10px;
+    }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+    .container {
+      max-width: 600px;
+      margin: 0 auto;
+      padding: 16px;
+      padding-bottom: 100px;
+    }
+    .header {
+      text-align: center;
+      padding: 32px 0 24px;
+    }
+    .header h1 {
+      margin: 0;
+      font-size: 1.5rem;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+    }
+    .header p {
+      margin: 6px 0 0;
+      color: var(--text-muted);
+      font-size: 0.875rem;
+    }
+    nav {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+      display: flex;
+      justify-content: center;
+      gap: 4px;
+      z-index: 100;
+    }
+    nav a {
+      flex: 1;
+      max-width: 90px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      padding: 8px 6px;
+      border-radius: var(--radius-sm);
+      text-decoration: none;
+      color: var(--text-muted);
+      font-size: 0.65rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+    nav a.active {
+      color: var(--primary);
+      background: rgba(59, 130, 246, 0.12);
+    }
+    nav svg { width: 22px; height: 22px; }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      margin-bottom: 12px;
+    }
+    .card-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .card-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: var(--radius-sm);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--surface-elevated);
+      flex-shrink: 0;
+    }
+    .card-icon svg { width: 20px; height: 20px; color: var(--primary); }
+    .card-title {
+      margin: 0;
+      font-size: 0.95rem;
+      font-weight: 700;
+    }
+    .info-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .info-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 12px;
+      background: var(--surface-elevated);
+      border-radius: var(--radius-sm);
+    }
+    .info-label {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+    .info-value {
+      font-size: 0.85rem;
+      font-weight: 600;
+      text-align: right;
+    }
+    .status-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: 6px;
+      background: var(--success);
+      box-shadow: 0 0 8px var(--success);
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+    }
+    @media (max-width: 480px) {
+      .grid-2 { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <h1>IR HVAC Telnet</h1>
+      <p>Dashboard</p>
+    </header>
+
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-icon">
+            <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"/></svg>
+          </div>
+          <h3 class="card-title">Network</h3>
+        </div>
+        <div class="info-grid" id="network">
+          <div class="info-row"><span class="info-label">Loading...</span></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <div class="card-icon">
+            <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
+          </div>
+          <h3 class="card-title">System</h3>
+        </div>
+        <div class="info-grid" id="system">
+          <div class="info-row"><span class="info-label">Loading...</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div class="card-icon">
+          <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+        </div>
+        <h3 class="card-title">Services</h3>
+      </div>
+      <div class="info-grid" id="services">
+        <div class="info-row"><span class="info-label">Loading...</span></div>
+      </div>
+    </div>
+  </div>
+
+  <nav>
+    <a href="/" class="active">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+      Home
+    </a>
+    <a href="/hvacs">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+      HVACs
+    </a>
+    <a href="/config">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+      Config
+    </a>
+    <a href="/system">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+      System
+    </a>
+  </nav>
+
+  <script>
+    const J = (u, o) => fetch(u, o).then(r => r.json());
+
+    async function refresh() {
+      const s = await J("/api/status");
+
+      document.getElementById("network").innerHTML = `
+        <div class="info-row"><span class="info-label">Mode</span><span class="info-value">${s.network_mode || "-"}</span></div>
+        <div class="info-row"><span class="info-label">IP</span><span class="info-value">${s.ip || "-"}</span></div>
+        <div class="info-row"><span class="info-label">Hostname</span><span class="info-value">${s.hostname || "-"}.local</span></div>
+      `;
+
+      document.getElementById("system").innerHTML = `
+        <div class="info-row"><span class="info-label">Emitters</span><span class="info-value">${s.emitter_count}</span></div>
+        <div class="info-row"><span class="info-label">HVACs</span><span class="info-value">${s.hvac_count}</span></div>
+        <div class="info-row"><span class="info-label">Telnet</span><span class="info-value">:${s.telnet_port}</span></div>
+      `;
+
+      document.getElementById("services").innerHTML = `
+        <div class="info-row"><span class="info-label">WireGuard</span><span class="info-value">${s.wireguard_enabled ? `<span class="status-dot"></span>${s.wireguard_connected ? "Connected" : "Enabled"}` : "Disabled"}</span></div>
+        <div class="info-row"><span class="info-label">IR Receiver</span><span class="info-value">${s.ir_receiver_enabled ? "GPIO " + s.ir_receiver_gpio : "Disabled"}</span></div>
+        <div class="info-row"><span class="info-label">Temp Sensors</span><span class="info-value">${s.temp_sensors_enabled ? s.temp_sensor_count + " found" : "Disabled"}</span></div>
+        <div class="info-row"><span class="info-label">DINplug</span><span class="info-value">${s.dinplug_status || "-"}</span></div>
+      `;
+    }
+
+    refresh().catch(e => console.error("Refresh failed:", e));
+    setInterval(() => refresh().catch(e => console.error("Refresh failed:", e)), 5000);
+  </script>
+</body>
+</html>

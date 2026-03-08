@@ -1,0 +1,753 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+  <meta name="theme-color" content="#0a0e14">
+  <title>HVACs - IR HVAC Telnet</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    :root {
+      --bg: #0a0e14;
+      --surface: #131920;
+      --surface-elevated: #1a2029;
+      --border: #252d3a;
+      --text: #f0f4f8;
+      --text-muted: #7a8a9d;
+      --primary: #3b82f6;
+      --success: #22c55e;
+      --danger: #ef4444;
+      --warning: #f59e0b;
+      --radius: 14px;
+      --radius-sm: 10px;
+    }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      padding: 16px;
+      padding-bottom: 100px;
+    }
+    .header {
+      text-align: center;
+      padding: 24px 0 16px;
+    }
+    .header h1 {
+      margin: 0;
+      font-size: 1.4rem;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+    }
+    .header p {
+      margin: 4px 0 0;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+    }
+    nav {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+      display: flex;
+      justify-content: center;
+      gap: 4px;
+      z-index: 100;
+    }
+    nav a {
+      flex: 1;
+      max-width: 90px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      padding: 8px 6px;
+      border-radius: var(--radius-sm);
+      text-decoration: none;
+      color: var(--text-muted);
+      font-size: 0.65rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+    nav a.active {
+      color: var(--primary);
+      background: rgba(59, 130, 246, 0.12);
+    }
+    nav svg { width: 22px; height: 22px; }
+
+    /* Tabs */
+    .tabs {
+      display: flex;
+      gap: 4px;
+      background: var(--surface);
+      border-radius: var(--radius);
+      padding: 4px;
+      margin-bottom: 16px;
+    }
+    .tab {
+      flex: 1;
+      padding: 10px 12px;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      font-size: 0.8rem;
+      font-weight: 600;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+    }
+    .tab.active {
+      background: var(--surface-elevated);
+      color: var(--text);
+    }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    /* Cards and Forms */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      margin-bottom: 12px;
+    }
+    .card-title {
+      margin: 0 0 14px;
+      font-size: 0.9rem;
+      font-weight: 700;
+    }
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+    }
+    .form-grid.cols-3 { grid-template-columns: repeat(3, 1fr); }
+    .form-grid.cols-1 { grid-template-columns: 1fr; }
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .field label {
+      font-size: 0.7rem;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    input, select, textarea {
+      width: 100%;
+      padding: 11px 12px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      background: var(--surface-elevated);
+      color: var(--text);
+      font-size: 0.85rem;
+    }
+    input:disabled, select:disabled, textarea:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      background: #141922;
+      color: #6b7786;
+      border-color: #202833;
+    }
+    textarea { min-height: 70px; resize: vertical; }
+    button {
+      width: 100%;
+      padding: 12px 16px;
+      border-radius: var(--radius-sm);
+      border: none;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      color: #fff;
+    }
+    .btn-primary { background: var(--success); }
+    .btn-secondary { background: var(--primary); }
+    .btn-warning { background: var(--warning); color: #111; }
+    .btn-sm {
+      width: auto;
+      padding: 8px 12px;
+      font-size: 0.75rem;
+    }
+    .btn-danger {
+      display: inline-block;
+      padding: 7px 10px;
+      border-radius: var(--radius-sm);
+      background: rgba(239, 68, 68, 0.15);
+      color: #ff8e8e;
+      text-decoration: none;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+
+    /* Tables */
+    .table-wrap { overflow-x: auto; margin: 0 -16px; padding: 0 16px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td {
+      padding: 10px 8px;
+      text-align: left;
+      font-size: 0.8rem;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    th {
+      color: var(--text-muted);
+      font-weight: 600;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+    }
+
+    /* Subcard for nested sections */
+    .subcard {
+      padding: 12px;
+      background: rgba(255,255,255,0.02);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      margin-top: 12px;
+    }
+    .subcard-title {
+      font-size: 0.75rem;
+      font-weight: 700;
+      color: var(--text-muted);
+      margin-bottom: 10px;
+      text-transform: uppercase;
+    }
+    .subcard-actions {
+      display: flex;
+      justify-content: flex-end;
+      margin-top: 10px;
+    }
+
+    /* Command rows */
+    .cmd-row {
+      display: grid;
+      grid-template-columns: 1.2fr 1fr 2fr auto;
+      gap: 8px;
+      margin-bottom: 8px;
+      align-items: start;
+    }
+    .cmd-row input, .cmd-row select, .cmd-row textarea {
+      padding: 9px 10px;
+      font-size: 0.8rem;
+    }
+
+    /* Button binding rows */
+    .bind-row {
+      display: grid;
+      grid-template-columns: repeat(8, minmax(0, 1fr)) auto;
+      gap: 8px;
+      margin-bottom: 8px;
+      align-items: end;
+    }
+    .bind-row input, .bind-row select {
+      padding: 9px 10px;
+      font-size: 0.8rem;
+    }
+
+    /* Check */
+    .check {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      background: var(--surface-elevated);
+      border-radius: var(--radius-sm);
+      margin-bottom: 12px;
+    }
+    .check input { width: auto; margin: 0; }
+    .check span { font-size: 0.85rem; font-weight: 600; }
+
+    /* Status */
+    .status {
+      padding: 12px;
+      background: var(--surface-elevated);
+      border-radius: var(--radius-sm);
+      font-family: Consolas, monospace;
+      font-size: 0.8rem;
+      white-space: pre-wrap;
+    }
+    .muted {
+      color: var(--text-muted);
+      font-size: 0.75rem;
+    }
+    pre {
+      padding: 12px;
+      background: var(--surface-elevated);
+      border-radius: var(--radius-sm);
+      font-family: Consolas, monospace;
+      font-size: 0.75rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+      margin: 12px 0 0;
+    }
+
+    @media (max-width: 640px) {
+      .form-grid, .form-grid.cols-3 { grid-template-columns: 1fr; }
+      .cmd-row { grid-template-columns: 1fr; }
+      .bind-row { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <h1>HVACs and Emitters</h1>
+      <p>Manage IR hardware and HVAC definitions</p>
+    </header>
+
+    <div class="tabs">
+      <button class="tab active" data-tab="list">List</button>
+      <button class="tab" data-tab="emitters">Emitters</button>
+      <button class="tab" data-tab="add">Add</button>
+      <button class="tab" data-tab="edit">Edit</button>
+      <button class="tab" data-tab="test">Test</button>
+    </div>
+
+    <!-- LIST TAB -->
+    <div id="tab-list" class="tab-content active">
+      <div class="card">
+        <h3 class="card-title">Registered HVACs</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>#</th><th>ID</th><th>Protocol</th><th>Emitter</th><th>Commands</th><th>Action</th></tr></thead>
+            <tbody id="hvac_rows"><tr><td colspan="6">Loading...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="status" id="status_list">Ready</div>
+    </div>
+
+    <!-- EMITTERS TAB -->
+    <div id="tab-emitters" class="tab-content">
+      <div class="card">
+        <h3 class="card-title">IR Emitters</h3>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>#</th><th>GPIO</th><th>Action</th></tr></thead>
+            <tbody id="emitter_rows"><tr><td colspan="3">Loading...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card">
+        <h3 class="card-title">Add Emitter</h3>
+        <form method="POST" action="/emitters/add" id="add_emitter_form">
+          <div class="form-grid">
+            <div class="field">
+              <label>GPIO</label>
+              <select name="gpios" id="gpio_select"></select>
+            </div>
+            <div class="field" style="justify-content:flex-end;">
+              <button class="btn-primary" type="submit">Add Emitter</button>
+            </div>
+          </div>
+        </form>
+      </div>
+      <div class="status" id="status_emitters">Ready</div>
+    </div>
+
+    <!-- ADD TAB -->
+    <div id="tab-add" class="tab-content">
+      <div class="card">
+        <h3 class="card-title">Add HVAC</h3>
+        <form method="POST" action="/hvacs/add" id="add_form">
+          <div class="form-grid cols-3">
+            <div class="field"><label>Protocol</label><select name="protocol" id="add_protocol"></select></div>
+            <div class="field"><label>Emitter</label><select name="emitter" id="add_emitter"></select></div>
+            <div class="field"><label>Model</label><input name="model" value="-1"></div>
+          </div>
+          <div id="add_custom" class="subcard" style="display:none">
+            <div class="subcard-title">Custom Commands</div>
+            <div id="add_commands"></div>
+          </div>
+          <button class="btn-primary" type="submit" style="margin-top:12px;">Add HVAC</button>
+        </form>
+      </div>
+      <div class="card" id="clone_card" style="display:none;">
+        <h3 class="card-title">Clone Custom HVAC</h3>
+        <form method="POST" action="/hvacs/clone">
+          <div class="form-grid">
+            <div class="field"><label>Source</label><select name="source_index" id="clone_source"></select></div>
+            <div class="field"><label>Emitter</label><select name="emitter" id="clone_emitter"></select></div>
+          </div>
+          <button class="btn-secondary" type="submit" style="margin-top:12px;">Clone HVAC</button>
+        </form>
+      </div>
+    </div>
+
+    <!-- EDIT TAB -->
+    <div id="tab-edit" class="tab-content">
+      <div class="card" id="edit_card">
+        <h3 class="card-title">Edit HVAC</h3>
+        <form method="POST" action="/hvacs/update" id="edit_form">
+          <div class="field" style="margin-bottom:12px;">
+            <label>Select HVAC</label>
+            <select name="index" id="edit_index"></select>
+          </div>
+          <div class="form-grid cols-3">
+            <div class="field"><label>Protocol</label><select name="protocol" id="edit_protocol"></select></div>
+            <div class="field"><label>Emitter</label><select name="emitter" id="edit_emitter"></select></div>
+            <div class="field"><label>Model</label><input name="model" id="edit_model" value="-1"></div>
+          </div>
+          <div class="form-grid cols-3" style="margin-top:12px;">
+            <div class="field"><label>Temp Source</label><select name="current_temp_source" id="edit_temp_source"><option value="setpoint">setpoint</option><option value="sensor">sensor</option></select></div>
+            <div class="field"><label>Sensor Index</label><input name="temp_sensor_index" id="edit_temp_index" type="number" min="0" max="7" value="0"></div>
+            <div class="field"><label>DINplug Keypads</label><input name="din_keypad_ids" id="edit_keypads" placeholder="10,11"></div>
+          </div>
+          <div id="edit_custom" class="subcard" style="display:none">
+            <div class="subcard-title">Custom Commands</div>
+            <div id="edit_commands"></div>
+          </div>
+          <div class="subcard">
+            <div class="subcard-title">DINplug Button Bindings</div>
+            <div id="button_rows"></div>
+          </div>
+          <button class="btn-secondary" type="submit" style="margin-top:12px;">Update HVAC</button>
+        </form>
+      </div>
+      <div class="status" id="status_edit">Select an HVAC to edit</div>
+    </div>
+
+    <!-- TEST TAB -->
+    <div id="tab-test" class="tab-content">
+      <div class="card">
+        <h3 class="card-title">Test Registered HVAC</h3>
+        <form id="test_form">
+          <div class="form-grid cols-3">
+            <div class="field"><label>HVAC</label><select name="id" id="test_hvac"></select></div>
+            <div class="field"><label>Power</label><select name="power" id="test_power"><option value="on">on</option><option value="off">off</option></select></div>
+            <div class="field"><label>Mode</label><select name="mode" id="test_mode"><option>auto</option><option>cool</option><option>heat</option><option>dry</option><option>fan</option></select></div>
+            <div class="field"><label>Temp</label><input name="temp" id="test_temp" value="24"></div>
+            <div class="field"><label>Fan</label><select name="fan" id="test_fan"><option>auto</option><option>low</option><option>medium</option><option>high</option></select></div>
+            <div class="field"><label>Swing V</label><select name="swingv" id="test_swingv"><option>off</option><option>auto</option><option>low</option><option>middle</option><option>high</option></select></div>
+            <div class="field"><label>Swing H</label><select name="swingh" id="test_swingh"><option>off</option><option>auto</option><option>left</option><option>middle</option><option>right</option></select></div>
+            <div class="field"><label>Light</label><select name="light" id="test_light"><option value="">default</option><option value="true">on</option><option value="false">off</option></select></div>
+            <div class="field" id="custom_cmd_wrap" style="display:none"><label>Custom Cmd</label><select name="command_name" id="test_command"></select></div>
+          </div>
+          <button class="btn-primary" type="submit" style="margin-top:12px;">Send Test</button>
+        </form>
+        <pre id="test_preview">{}</pre>
+        <pre id="test_response">-</pre>
+      </div>
+      <div class="card">
+        <h3 class="card-title">Send Raw IR Code</h3>
+        <form id="raw_form">
+          <div class="form-grid cols-3">
+            <div class="field"><label>Emitter</label><select name="emitter" id="raw_emitter"></select></div>
+            <div class="field"><label>Encoding</label><select name="encoding"><option value="pronto">pronto</option><option value="gc">gc</option><option value="racepoint">racepoint</option><option value="rawhex">rawhex</option></select></div>
+            <div class="field"><label>Code</label><input name="code" placeholder="0000 006D ..."></div>
+          </div>
+          <button class="btn-warning" type="submit" style="margin-top:12px;">Send Raw</button>
+        </form>
+        <pre id="raw_response">-</pre>
+      </div>
+    </div>
+  </div>
+
+  <nav>
+    <a href="/">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+      Home
+    </a>
+    <a href="/hvacs" class="active">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+      HVACs
+    </a>
+    <a href="/config">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+      Config
+    </a>
+    <a href="/system">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+      System
+    </a>
+  </nav>
+
+  <script>
+    const J = (u, o) => fetch(u, o).then(r => r.json());
+    const byId = id => document.getElementById(id);
+    const DINACTIONS = ["none","temp_up","temp_down","set_temp","power_on","power_off","toggle_power","mode_heat","mode_cool","mode_fan","mode_auto","mode_off"];
+    const ACTIONS_WITH_VALUE = new Set(["temp_up","temp_down","set_temp"]);
+    let cfg, meta;
+    let activeTab = 'list';
+    const commandEditorState = { add: 1, edit: 1 };
+
+    // Tab switching
+    function setActiveTab(name) {
+      activeTab = name;
+      document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.toggle('active', c.id === 'tab-' + name));
+    }
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => setActiveTab(tab.dataset.tab));
+    });
+
+    function optHtml(arr, valFn, labelFn, selected) {
+      return arr.map(v => `<option value="${valFn(v)}"${String(valFn(v)) === String(selected) ? ' selected' : ''}>${labelFn(v)}</option>`).join('');
+    }
+    function emitterOpts(sel) {
+      return optHtml((cfg.emitters || []).map((e, i) => ({ i, g: e.gpio })), v => v.i, v => `${v.i} (GPIO ${v.g})`, sel);
+    }
+    function protocolOpts(sel) {
+      return optHtml(meta.protocols || [], v => v, v => v, sel);
+    }
+    function usedCommandCount(items) {
+      const count = (items || []).filter(c => c && (c.name || c.code)).length;
+      return Math.min(meta.max_custom_commands || 16, Math.max(count + 1, 1));
+    }
+    function commandRowHtml(prefix, i, c, key) {
+      return `<div class="cmd-row">
+          <input name="${prefix}${i}_name" placeholder="name" value="${c.name || ''}">
+          <select name="${prefix}${i}_encoding">${optHtml(['pronto','gc','racepoint','rawhex'], v => v, v => v, c.encoding || 'pronto')}</select>
+          <textarea name="${prefix}${i}_code" placeholder="code">${c.code || ''}</textarea>
+          <button type="button" class="btn-sm btn-secondary" onclick="removeCommandRow(this,'${key}')">Delete</button>
+        </div>`;
+    }
+    function renderCommandEditor(targetId, prefix, items, key) {
+      const target = byId(targetId);
+      const limit = meta.max_custom_commands || 16;
+      const visible = Math.min(limit, Math.max(commandEditorState[key] || 1, usedCommandCount(items)));
+      commandEditorState[key] = visible;
+      let html = '';
+      for (let i = 0; i < visible; i++) html += commandRowHtml(prefix, i, items[i] || {}, key);
+      html += `<div class="subcard-actions"><button type="button" class="btn-sm btn-secondary" ${visible >= limit ? 'disabled' : ''} onclick="addCommandRow('${key}')">Add Command</button></div>`;
+      target.innerHTML = html;
+    }
+    window.addCommandRow = function(key) {
+      const limit = meta.max_custom_commands || 16;
+      commandEditorState[key] = Math.min(limit, (commandEditorState[key] || 1) + 1);
+      if (key === 'add') {
+        renderCommandEditor('add_commands', 'cc', [], 'add');
+      } else {
+        const idx = Number(byId('edit_index').value || 0);
+        const h = (cfg.hvacs || [])[idx];
+        renderCommandEditor('edit_commands', 'cc', h?.custom?.commands || [], 'edit');
+      }
+    };
+    window.removeCommandRow = function(btn, key) {
+      const row = btn.closest('.cmd-row');
+      if (!row) return;
+      const editor = row.parentElement;
+      row.remove();
+      const rows = Array.from(editor.querySelectorAll('.cmd-row'));
+      rows.forEach((r, i) => {
+        r.querySelectorAll('[name]').forEach(el => {
+          el.name = el.name.replace(/cc\d+_/, `cc${i}_`);
+        });
+      });
+      commandEditorState[key] = Math.max(rows.length, 1);
+      if (!rows.length) {
+        if (key === 'add') renderCommandEditor('add_commands', 'cc', [], 'add');
+        else {
+          const idx = Number(byId('edit_index').value || 0);
+          const h = (cfg.hvacs || [])[idx];
+          renderCommandEditor('edit_commands', 'cc', h?.custom?.commands || [], 'edit');
+        }
+      }
+    };
+    function buttonRows(items, isCustom) {
+      let html = '';
+      const actions = isCustom ? ['none', ...((items._customActions) || [])] : DINACTIONS;
+      for (let i = 0; i < (meta.max_dinplug_buttons || 8); i++) {
+        const b = items[i] || {};
+        html += `<div class="bind-row">
+          <div class="field"><label>Keypad</label><input name="btn${i}_keypad_id" type="number" min="0" value="${b.keypad_id || 0}"></div>
+          <div class="field"><label>Button</label><input name="btn${i}_id" type="number" min="0" value="${b.id || 0}"></div>
+          <div class="field"><label>Press Action</label><select name="btn${i}_press_action">${optHtml(actions, v => v, v => v, b.press_action || 'none')}</select></div>
+          <div class="field"><label>Press Value</label><input name="btn${i}_press_value" type="number" step="0.5" value="${b.press_value != null ? b.press_value : 1}"></div>
+          <div class="field"><label>Hold Action</label><select name="btn${i}_hold_action">${optHtml(actions, v => v, v => v, b.hold_action || 'none')}</select></div>
+          <div class="field"><label>Hold Value</label><input name="btn${i}_hold_value" type="number" step="0.5" value="${b.hold_value != null ? b.hold_value : 1}"></div>
+          <div class="field"><label>Toggle Mode</label><select name="btn${i}_toggle_power_mode">${optHtml(meta.toggle_modes || ['auto','cool','heat','dry','fan'], v => v, v => v, b.toggle_power_mode || 'auto')}</select></div>
+          <div class="field"><label>LED Follow</label><select name="btn${i}_led_follow_mode">${optHtml(['0','1','2'], v => v, v => ({'0':'disabled','1':'on when HVAC on','2':'on when HVAC off'}[v]), String(b.led_follow_mode != null ? b.led_follow_mode : 0))}</select></div>
+          <button type="button" class="btn-sm btn-secondary" onclick="clearBindRow(this)">Clear</button>
+        </div>`;
+      }
+      return html;
+    }
+    function actionUsesValue(action) {
+      return ACTIONS_WITH_VALUE.has(String(action || '').toLowerCase());
+    }
+    function syncBindRow(row) {
+      const pressAction = row.querySelector('[name$="_press_action"]');
+      const pressValue = row.querySelector('[name$="_press_value"]');
+      const holdAction = row.querySelector('[name$="_hold_action"]');
+      const holdValue = row.querySelector('[name$="_hold_value"]');
+      const toggleMode = row.querySelector('[name$="_toggle_power_mode"]');
+      const toggleEnabled = String(pressAction?.value || '').toLowerCase() === 'toggle_power' ||
+        String(holdAction?.value || '').toLowerCase() === 'toggle_power';
+      if (pressValue) pressValue.disabled = !actionUsesValue(pressAction?.value);
+      if (holdValue) holdValue.disabled = !actionUsesValue(holdAction?.value);
+      if (toggleMode) toggleMode.disabled = !toggleEnabled;
+    }
+    function bindBindingControls() {
+      document.querySelectorAll('#button_rows .bind-row').forEach(row => {
+        row.querySelectorAll('select').forEach(sel => sel.addEventListener('change', () => syncBindRow(row)));
+        syncBindRow(row);
+      });
+    }
+    window.clearBindRow = function(btn) {
+      const row = btn.parentElement;
+      row.querySelectorAll('input').forEach(el => el.value = el.type === 'number' ? '0' : '');
+      row.querySelectorAll('select').forEach(el => el.value = el.options[0].value);
+      syncBindRow(row);
+    };
+    async function reloadData() {
+      [cfg, meta] = await Promise.all([J('/api/config'), J('/api/meta')]);
+    }
+    async function refreshPage(keepTab = activeTab) {
+      await reloadData();
+      renderHvacTable();
+      renderEmitterTable();
+      renderAddForm();
+      renderClone();
+      renderEditSelector();
+      renderTestForm();
+      setActiveTab(keepTab);
+    }
+
+    function renderHvacTable() {
+      const rows = cfg.hvacs || [];
+      byId('hvac_rows').innerHTML = rows.length
+        ? rows.map((h, i) => `<tr><td>${i}</td><td>${h.id}</td><td>${h.protocol}</td><td>${h.emitter}</td><td>${h.custom?.commands?.map(c => c.name).join(', ') || '-'}</td><td><a class="btn-danger" href="/hvacs/delete?index=${i}">Delete</a></td></tr>`).join('')
+        : '<tr><td colspan="6">No HVACs registered</td></tr>';
+      byId('status_list').textContent = `HVACs: ${rows.length}/${meta.max_hvacs || '?'}`;
+    }
+
+    function renderEmitterTable() {
+      const emitters = cfg.emitters || [];
+      byId('emitter_rows').innerHTML = emitters.length
+        ? emitters.map((e, i) => `<tr><td>${i}</td><td>GPIO ${e.gpio}</td><td><a class="btn-danger" href="/emitters/delete?index=${i}">Delete</a></td></tr>`).join('')
+        : '<tr><td colspan="3">No emitters</td></tr>';
+      byId('gpio_select').innerHTML = (meta.gpio_options || []).map(g => `<option value="${g}">GPIO ${g}</option>`).join('');
+      byId('status_emitters').textContent = `Emitters: ${emitters.length}/${meta.max_emitters || '?'}`;
+    }
+
+    function renderAddForm() {
+      byId('add_protocol').innerHTML = protocolOpts('CUSTOM');
+      byId('add_emitter').innerHTML = emitterOpts(0);
+      commandEditorState.add = Math.max(commandEditorState.add || 1, 1);
+      renderCommandEditor('add_commands', 'cc', [], 'add');
+      syncAddCustom();
+    }
+    function syncAddCustom() {
+      byId('add_custom').style.display = byId('add_protocol').value === 'CUSTOM' ? 'block' : 'none';
+    }
+    byId('add_protocol').addEventListener('change', syncAddCustom);
+
+    function renderClone() {
+      const customs = (cfg.hvacs || []).map((h, i) => ({ h, i })).filter(x => x.h.protocol === 'CUSTOM');
+      byId('clone_card').style.display = customs.length ? 'block' : 'none';
+      if (!customs.length) return;
+      byId('clone_source').innerHTML = customs.map(x => `<option value="${x.i}">${x.h.id} (${x.h.custom?.commands?.length || 0} cmds)</option>`).join('');
+      byId('clone_emitter').innerHTML = emitterOpts(0);
+    }
+
+    function renderEditSelector() {
+      const hvacs = cfg.hvacs || [];
+      if (!hvacs.length) {
+        byId('edit_card').innerHTML = '<p style="color:var(--text-muted)">No HVACs to edit. Add one first.</p>';
+        return;
+      }
+      byId('edit_index').innerHTML = hvacs.map((h, i) => `<option value="${i}">${h.id} (${h.protocol})</option>`).join('');
+      syncEdit();
+    }
+    function syncEdit() {
+      const idx = Number(byId('edit_index').value || 0);
+      const h = (cfg.hvacs || [])[idx];
+      if (!h) return;
+      byId('edit_protocol').innerHTML = protocolOpts(h.protocol);
+      byId('edit_emitter').innerHTML = emitterOpts(h.emitter);
+      byId('edit_model').value = h.model;
+      byId('edit_temp_source').value = h.current_temp_source || 'setpoint';
+      byId('edit_temp_index').value = h.temp_sensor_index || 0;
+      byId('edit_keypads').value = h.dinplug?.keypad_ids || '';
+      const cmds = h.custom?.commands || [];
+      commandEditorState.edit = usedCommandCount(cmds);
+      renderCommandEditor('edit_commands', 'cc', cmds, 'edit');
+      byId('edit_custom').style.display = h.protocol === 'CUSTOM' ? 'block' : 'none';
+      const buttons = h.dinplug?.buttons || [];
+      buttons._customActions = cmds.map(c => 'custom:' + c.name);
+      byId('button_rows').innerHTML = buttonRows(buttons, h.protocol === 'CUSTOM');
+      bindBindingControls();
+      byId('status_edit').textContent = `Editing: ${h.id}`;
+    }
+    byId('edit_index').addEventListener('change', syncEdit);
+
+    function renderTestForm() {
+      byId('test_hvac').innerHTML = (cfg.hvacs || []).map(h => `<option value="${h.id}">${h.id} (${h.protocol})</option>`).join('');
+      byId('raw_emitter').innerHTML = emitterOpts(0);
+      syncTestCustom();
+    }
+    function syncTestCustom() {
+      const idx = byId('test_hvac').selectedIndex;
+      const h = (cfg.hvacs || [])[idx];
+      if (!h) return;
+      const isCustom = h.protocol === 'CUSTOM';
+      byId('custom_cmd_wrap').style.display = isCustom ? 'block' : 'none';
+      ['test_power','test_mode','test_temp','test_fan','test_swingv','test_swingh','test_light'].forEach(id => byId(id).disabled = isCustom);
+      const sel = byId('test_command');
+      sel.innerHTML = '';
+      if (isCustom && h.custom?.commands) {
+        h.custom.commands.forEach(c => sel.innerHTML += `<option value="${c.name}">${c.name}</option>`);
+      }
+      updateTestPreview();
+    }
+    byId('test_hvac').addEventListener('change', syncTestCustom);
+
+    function updateTestPreview() {
+      const form = new FormData(byId('test_form'));
+      const data = { cmd: 'send' };
+      for (const [k, v] of form.entries()) if (v !== '') data[k] = v;
+      byId('test_preview').textContent = JSON.stringify(data, null, 2);
+    }
+    byId('test_form').addEventListener('input', updateTestPreview);
+
+    byId('test_form').addEventListener('submit', async e => {
+      e.preventDefault();
+      try {
+        const res = await fetch('/hvacs/test', { method: 'POST', body: new URLSearchParams(new FormData(e.target)) });
+        byId('test_response').textContent = JSON.stringify(await res.json(), null, 2);
+      } catch (err) {
+        byId('test_response').textContent = 'Error: ' + err;
+      }
+    });
+
+    byId('raw_form').addEventListener('submit', async e => {
+      e.preventDefault();
+      try {
+        const res = await fetch('/raw/test', { method: 'POST', body: new URLSearchParams(new FormData(e.target)) });
+        byId('raw_response').textContent = JSON.stringify(await res.json(), null, 2);
+      } catch (err) {
+        byId('raw_response').textContent = 'Error: ' + err;
+      }
+    });
+    byId('add_emitter_form').addEventListener('submit', async e => {
+      e.preventDefault();
+      byId('status_emitters').textContent = 'Adding emitter...';
+      const res = await fetch('/emitters/add', { method: 'POST', body: new URLSearchParams(new FormData(e.target)) });
+      if (!res.ok) {
+        byId('status_emitters').textContent = `Add failed (${res.status})`;
+        return;
+      }
+      await refreshPage('emitters');
+      byId('status_emitters').textContent = 'Emitter added.';
+    });
+
+    async function init() {
+      await refreshPage(activeTab);
+    }
+    init().catch(e => {
+      byId('status_list').textContent = 'Load failed: ' + e;
+    });
+  </script>
+</body>
+</html>

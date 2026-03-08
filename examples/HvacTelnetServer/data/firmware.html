@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+  <meta name="theme-color" content="#0a0e14">
+  <title>Firmware - IR HVAC Telnet</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    :root {
+      --bg: #0a0e14;
+      --surface: #151b24;
+      --surface-elevated: #1c232e;
+      --border: #2a3444;
+      --text: #f0f4f8;
+      --text-muted: #8899aa;
+      --primary: #3b82f6;
+      --success: #22c55e;
+      --warning: #f59e0b;
+      --radius: 12px;
+      --radius-sm: 8px;
+    }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+    .container {
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 16px;
+      padding-bottom: 100px;
+    }
+    .header { text-align: center; padding: 24px 0 16px; }
+    .header h1 { margin: 0; font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; }
+    .header p { margin: 4px 0 0; color: var(--text-muted); font-size: 0.875rem; }
+    nav {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      padding: 8px 16px calc(8px + env(safe-area-inset-bottom));
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      z-index: 100;
+    }
+    nav a {
+      flex: 1;
+      max-width: 100px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      padding: 8px 12px;
+      border-radius: var(--radius-sm);
+      text-decoration: none;
+      color: var(--text-muted);
+      font-size: 0.7rem;
+      font-weight: 600;
+    }
+    nav a.active { color: var(--primary); background: rgba(59, 130, 246, 0.1); }
+    nav svg { width: 22px; height: 22px; }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      margin-bottom: 12px;
+    }
+    .card-title {
+      margin: 0 0 12px;
+      font-size: 0.95rem;
+      font-weight: 700;
+    }
+    input[type="file"] {
+      width: 100%;
+      padding: 12px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      background: var(--surface-elevated);
+      color: var(--text);
+    }
+    button, .link-card {
+      display: block;
+      width: 100%;
+      padding: 14px 16px;
+      border-radius: var(--radius-sm);
+      border: none;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      color: white;
+      text-align: center;
+      text-decoration: none;
+    }
+    .btn-primary { background: var(--success); }
+    .btn-secondary { background: var(--primary); }
+    .btn-warning { background: var(--warning); color: #111827; }
+    .progress {
+      height: 8px;
+      background: var(--surface-elevated);
+      border-radius: 999px;
+      overflow: hidden;
+      margin-top: 12px;
+    }
+    .bar {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--primary), var(--success));
+      transition: width 0.2s ease;
+    }
+    .status-box {
+      margin-top: 12px;
+      padding: 12px;
+      background: var(--surface-elevated);
+      border-radius: var(--radius-sm);
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 0.8rem;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .link-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+    }
+    .link-card {
+      background: var(--surface-elevated);
+      border: 1px solid var(--border);
+      color: var(--text);
+    }
+    .link-card small {
+      display: block;
+      margin-top: 4px;
+      color: var(--text-muted);
+      font-weight: 400;
+    }
+    @media (max-width: 560px) {
+      .link-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <h1>Firmware and Filesystem</h1>
+      <p>App OTA, SPIFFS OTA, and config backup tools</p>
+    </header>
+
+    <div class="card">
+      <h3 class="card-title">Firmware (.bin)</h3>
+      <input id="fw_file" type="file" accept=".bin,application/octet-stream">
+      <button class="btn-primary" type="button" id="fw_btn" style="margin-top:12px;">Upload Firmware</button>
+      <div class="progress"><div id="fw_bar" class="bar"></div></div>
+      <div class="status-box" id="fw_status">Ready</div>
+    </div>
+
+    <div class="card">
+      <h3 class="card-title">SPIFFS Image (spiffs.bin)</h3>
+      <input id="fs_file" type="file" accept=".bin,application/octet-stream">
+      <button class="btn-warning" type="button" id="fs_btn" style="margin-top:12px;">Upload SPIFFS</button>
+      <div class="progress"><div id="fs_bar" class="bar"></div></div>
+      <div class="status-box" id="fs_status">Ready</div>
+    </div>
+
+    <div class="card">
+      <h3 class="card-title">Config Backup and Restore</h3>
+      <div class="link-grid">
+        <a class="link-card" href="/config/download">Download Config<small>Save the active config JSON</small></a>
+        <a class="link-card" href="/config/upload">Upload Config<small>Restore a previously saved config file</small></a>
+      </div>
+    </div>
+  </div>
+
+  <nav>
+    <a href="/">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+      Home
+    </a>
+    <a href="/config">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+      Config
+    </a>
+    <a href="/monitor">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+      Monitor
+    </a>
+    <a href="/firmware" class="active">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+      Firmware
+    </a>
+  </nav>
+
+  <script>
+    function uploadFile(fileInputId, buttonId, url, barId, statusId, label) {
+      const file = document.getElementById(fileInputId).files[0];
+      if (!file) {
+        document.getElementById(statusId).textContent = "Select a file first.";
+        return;
+      }
+      const btn = document.getElementById(buttonId);
+      btn.disabled = true;
+      const xhr = new XMLHttpRequest();
+      const fd = new FormData();
+      fd.append(label === "Firmware" ? "firmware" : "filesystem", file);
+      xhr.open("POST", url, true);
+      xhr.upload.onprogress = (ev) => {
+        if (!ev.lengthComputable) return;
+        const p = Math.round((ev.loaded / ev.total) * 100);
+        document.getElementById(barId).style.width = p + "%";
+        document.getElementById(statusId).textContent = `Uploading ${label}... ${p}%`;
+      };
+      xhr.onerror = () => {
+        btn.disabled = false;
+        document.getElementById(statusId).textContent = `${label} upload failed.`;
+        document.getElementById(barId).style.width = "0%";
+      };
+      xhr.onload = () => {
+        btn.disabled = false;
+        if (xhr.status >= 200 && xhr.status < 300) {
+          document.getElementById(barId).style.width = "100%";
+          document.getElementById(statusId).textContent = `${label} upload complete. Device should reboot.`;
+        } else {
+          document.getElementById(statusId).textContent = `${label} update failed (${xhr.status}).`;
+        }
+      };
+      xhr.send(fd);
+    }
+
+    document.getElementById("fw_btn").addEventListener("click", () => uploadFile("fw_file", "fw_btn", "/firmware/update", "fw_bar", "fw_status", "Firmware"));
+    document.getElementById("fs_btn").addEventListener("click", () => uploadFile("fs_file", "fs_btn", "/spiffs/update", "fs_bar", "fs_status", "Filesystem"));
+  </script>
+</body>
+</html>

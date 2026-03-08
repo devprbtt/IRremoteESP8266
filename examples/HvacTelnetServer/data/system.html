@@ -1,0 +1,486 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+  <meta name="theme-color" content="#0a0e14">
+  <title>System - IR HVAC Telnet</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    :root {
+      --bg: #0a0e14;
+      --surface: #131920;
+      --surface-elevated: #1a2029;
+      --border: #252d3a;
+      --text: #f0f4f8;
+      --text-muted: #7a8a9d;
+      --primary: #3b82f6;
+      --success: #22c55e;
+      --warning: #f59e0b;
+      --terminal-bg: #0d1117;
+      --terminal-text: #22c55e;
+      --radius: 14px;
+      --radius-sm: 10px;
+    }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+    .container {
+      max-width: 640px;
+      margin: 0 auto;
+      padding: 16px;
+      padding-bottom: 100px;
+    }
+    .header {
+      text-align: center;
+      padding: 24px 0 16px;
+    }
+    .header h1 {
+      margin: 0;
+      font-size: 1.4rem;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+    }
+    .header p {
+      margin: 4px 0 0;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+    }
+    nav {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      padding: 8px 12px calc(8px + env(safe-area-inset-bottom));
+      display: flex;
+      justify-content: center;
+      gap: 4px;
+      z-index: 100;
+    }
+    nav a {
+      flex: 1;
+      max-width: 90px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      padding: 8px 6px;
+      border-radius: var(--radius-sm);
+      text-decoration: none;
+      color: var(--text-muted);
+      font-size: 0.65rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+    nav a.active {
+      color: var(--primary);
+      background: rgba(59, 130, 246, 0.12);
+    }
+    nav svg { width: 22px; height: 22px; }
+
+    /* Tabs */
+    .tabs {
+      display: flex;
+      gap: 4px;
+      background: var(--surface);
+      border-radius: var(--radius);
+      padding: 4px;
+      margin-bottom: 16px;
+    }
+    .tab {
+      flex: 1;
+      padding: 10px 8px;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      font-size: 0.75rem;
+      font-weight: 600;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+    }
+    .tab.active {
+      background: var(--surface-elevated);
+      color: var(--text);
+    }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    /* Cards */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      margin-bottom: 12px;
+    }
+    .card-title {
+      margin: 0 0 12px;
+      font-size: 0.9rem;
+      font-weight: 700;
+    }
+    input[type="file"] {
+      width: 100%;
+      padding: 12px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      background: var(--surface-elevated);
+      color: var(--text);
+      font-size: 0.85rem;
+    }
+    button, .link-btn {
+      display: block;
+      width: 100%;
+      padding: 12px 16px;
+      border-radius: var(--radius-sm);
+      border: none;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      color: #fff;
+      text-align: center;
+      text-decoration: none;
+    }
+    .btn-primary { background: var(--success); }
+    .btn-secondary { background: var(--primary); }
+    .btn-warning { background: var(--warning); color: #111; }
+    .btn-outline {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .btn-sm {
+      width: auto;
+      padding: 10px 14px;
+      font-size: 0.8rem;
+    }
+    .progress {
+      height: 6px;
+      background: var(--surface-elevated);
+      border-radius: 999px;
+      overflow: hidden;
+      margin-top: 10px;
+    }
+    .bar {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, var(--primary), var(--success));
+      transition: width 0.2s ease;
+    }
+    .status {
+      margin-top: 10px;
+      padding: 10px 12px;
+      background: var(--surface-elevated);
+      border-radius: var(--radius-sm);
+      font-family: Consolas, monospace;
+      font-size: 0.8rem;
+      white-space: pre-wrap;
+    }
+    .terminal {
+      background: var(--terminal-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 12px;
+      height: 320px;
+      overflow-y: auto;
+      font-family: Consolas, monospace;
+      font-size: 0.75rem;
+      line-height: 1.5;
+      color: var(--terminal-text);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: var(--surface-elevated);
+      font-size: 0.8rem;
+      font-weight: 600;
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--text-muted);
+    }
+    .status-dot.active {
+      background: var(--success);
+      box-shadow: 0 0 8px var(--success);
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    .link-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+    }
+    .link-card {
+      display: block;
+      padding: 12px;
+      border-radius: var(--radius-sm);
+      background: var(--surface-elevated);
+      border: 1px solid var(--border);
+      color: var(--text);
+      text-decoration: none;
+      font-size: 0.85rem;
+      font-weight: 600;
+    }
+    .link-card small {
+      display: block;
+      margin-top: 4px;
+      color: var(--text-muted);
+      font-weight: 400;
+    }
+    @media (max-width: 480px) {
+      .link-grid { grid-template-columns: 1fr; }
+      .row { flex-direction: column; align-items: stretch; }
+      .row .btn-sm { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <h1>System</h1>
+      <p>Monitor, firmware updates, and backup</p>
+    </header>
+
+    <div class="tabs">
+      <button class="tab active" data-tab="monitor">Monitor</button>
+      <button class="tab" data-tab="firmware">Firmware</button>
+      <button class="tab" data-tab="backup">Backup</button>
+    </div>
+
+    <!-- MONITOR TAB -->
+    <div id="tab-monitor" class="tab-content active">
+      <div class="card">
+        <h3 class="card-title">Live Log</h3>
+        <div class="row">
+          <div class="status-pill"><span id="dot" class="status-dot"></span><span id="mon_state">Loading...</span></div>
+          <button class="btn-secondary btn-sm" type="button" id="toggle_btn">Toggle</button>
+          <button class="btn-outline btn-sm" type="button" id="clear_btn">Clear</button>
+        </div>
+        <div id="log_box" class="terminal">Loading...</div>
+        <div class="row" style="margin-top:12px;">
+          <button class="btn-outline btn-sm" type="button" id="copy_last_btn">Copy Last IR</button>
+          <button class="btn-outline btn-sm" type="button" id="copy_all_btn">Copy All IR</button>
+        </div>
+        <div class="status" id="mon_status">Ready</div>
+      </div>
+    </div>
+
+    <!-- FIRMWARE TAB -->
+    <div id="tab-firmware" class="tab-content">
+      <div class="card">
+        <h3 class="card-title">Firmware Update (.bin)</h3>
+        <input id="fw_file" type="file" accept=".bin,application/octet-stream">
+        <button class="btn-primary" type="button" id="fw_btn" style="margin-top:10px;">Upload Firmware</button>
+        <div class="progress"><div id="fw_bar" class="bar"></div></div>
+        <div class="status" id="fw_status">Ready</div>
+      </div>
+      <div class="card">
+        <h3 class="card-title">SPIFFS Filesystem (spiffs.bin)</h3>
+        <input id="fs_file" type="file" accept=".bin,application/octet-stream">
+        <button class="btn-warning" type="button" id="fs_btn" style="margin-top:10px;">Upload SPIFFS</button>
+        <div class="progress"><div id="fs_bar" class="bar"></div></div>
+        <div class="status" id="fs_status">Ready</div>
+      </div>
+    </div>
+
+    <!-- BACKUP TAB -->
+    <div id="tab-backup" class="tab-content">
+      <div class="card">
+        <h3 class="card-title">Configuration Backup</h3>
+        <div class="link-grid">
+          <a class="link-card" href="/config/download">Download Config<small>Save current config JSON</small></a>
+          <a class="link-card" href="#" id="upload_config_link">Restore Config<small>Upload saved config file</small></a>
+        </div>
+      </div>
+      <div class="card" id="restore_card" style="display:none;">
+        <h3 class="card-title">Restore Configuration</h3>
+        <input id="cfg_file" type="file" accept=".json,application/json">
+        <button class="btn-secondary" type="button" id="cfg_btn" style="margin-top:10px;">Upload Config</button>
+        <div class="status" id="cfg_status">Select a config.json file</div>
+      </div>
+    </div>
+  </div>
+
+  <nav>
+    <a href="/">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
+      Home
+    </a>
+    <a href="/hvacs">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+      HVACs
+    </a>
+    <a href="/config">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+      Config
+    </a>
+    <a href="/system" class="active">
+      <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+      System
+    </a>
+  </nav>
+
+  <script>
+    const J = (u, o) => fetch(u, o).then(r => r.json());
+    const byId = id => document.getElementById(id);
+    let lines = [];
+    let enabled = false;
+
+    // Tab switching
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        tab.classList.add('active');
+        byId('tab-' + tab.dataset.tab).classList.add('active');
+      });
+    });
+
+    // Monitor functions
+    function irCodes() {
+      return lines.filter(l => l.includes('ir-rx ')).map(l => l.slice(l.indexOf('ir-rx ') + 6));
+    }
+
+    async function copyText(text) {
+      if (!text) {
+        byId('mon_status').textContent = 'No IR code available.';
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(text);
+        byId('mon_status').textContent = 'Copied to clipboard.';
+      } catch (_e) {
+        byId('mon_status').textContent = 'Clipboard copy failed.';
+      }
+    }
+
+    async function loadMonitor() {
+      const d = await J('/api/monitor');
+      enabled = !!d.enabled;
+      lines = d.lines || [];
+      byId('mon_state').textContent = enabled ? 'Monitor enabled' : 'Monitor disabled';
+      byId('dot').classList.toggle('active', enabled);
+      const log = byId('log_box');
+      log.textContent = lines.join('\n');
+      log.scrollTop = log.scrollHeight;
+    }
+
+    async function toggleMonitor() {
+      const body = new URLSearchParams({ enabled: enabled ? '0' : '1' });
+      await fetch('/monitor/toggle', { method: 'POST', body });
+      await loadMonitor();
+    }
+
+    async function clearMonitor() {
+      await fetch('/monitor/clear', { method: 'POST' });
+      await loadMonitor();
+      byId('mon_status').textContent = 'Log cleared.';
+    }
+
+    byId('toggle_btn').addEventListener('click', () => toggleMonitor().catch(e => byId('mon_status').textContent = 'Toggle failed: ' + e));
+    byId('clear_btn').addEventListener('click', () => clearMonitor().catch(e => byId('mon_status').textContent = 'Clear failed: ' + e));
+    byId('copy_last_btn').addEventListener('click', () => {
+      const codes = irCodes();
+      copyText(codes.length ? codes[codes.length - 1] : '');
+    });
+    byId('copy_all_btn').addEventListener('click', () => {
+      const codes = irCodes();
+      copyText(codes.join('\n'));
+    });
+
+    loadMonitor().catch(e => byId('mon_status').textContent = 'Load failed: ' + e);
+    setInterval(() => loadMonitor().catch(e => byId('mon_status').textContent = 'Refresh failed: ' + e), 1000);
+
+    // Firmware upload
+    function uploadFile(fileInputId, buttonId, url, barId, statusId, label) {
+      const file = byId(fileInputId).files[0];
+      if (!file) {
+        byId(statusId).textContent = 'Select a file first.';
+        return;
+      }
+      const btn = byId(buttonId);
+      btn.disabled = true;
+      const xhr = new XMLHttpRequest();
+      const fd = new FormData();
+      fd.append(label === 'Firmware' ? 'firmware' : 'filesystem', file);
+      xhr.open('POST', url, true);
+      xhr.upload.onprogress = ev => {
+        if (!ev.lengthComputable) return;
+        const p = Math.round((ev.loaded / ev.total) * 100);
+        byId(barId).style.width = p + '%';
+        byId(statusId).textContent = `Uploading ${label}... ${p}%`;
+      };
+      xhr.onerror = () => {
+        btn.disabled = false;
+        byId(statusId).textContent = `${label} upload failed.`;
+        byId(barId).style.width = '0%';
+      };
+      xhr.onload = () => {
+        btn.disabled = false;
+        if (xhr.status >= 200 && xhr.status < 300) {
+          byId(barId).style.width = '100%';
+          byId(statusId).textContent = `${label} upload complete. Device should reboot.`;
+        } else {
+          byId(statusId).textContent = `${label} update failed (${xhr.status}).`;
+        }
+      };
+      xhr.send(fd);
+    }
+
+    byId('fw_btn').addEventListener('click', () => uploadFile('fw_file', 'fw_btn', '/firmware/update', 'fw_bar', 'fw_status', 'Firmware'));
+    byId('fs_btn').addEventListener('click', () => uploadFile('fs_file', 'fs_btn', '/spiffs/update', 'fs_bar', 'fs_status', 'Filesystem'));
+
+    // Config restore
+    byId('upload_config_link').addEventListener('click', e => {
+      e.preventDefault();
+      byId('restore_card').style.display = 'block';
+    });
+
+    byId('cfg_btn').addEventListener('click', async () => {
+      const file = byId('cfg_file').files[0];
+      if (!file) {
+        byId('cfg_status').textContent = 'Select a config.json file first.';
+        return;
+      }
+      try {
+        const text = await file.text();
+        const json = JSON.parse(text);
+        byId('cfg_status').textContent = 'Uploading config...';
+        const res = await fetch('/api/config/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(json)
+        });
+        const result = await res.text();
+        byId('cfg_status').textContent = result || 'Config restored. Device should reboot.';
+      } catch (err) {
+        byId('cfg_status').textContent = 'Error: ' + err.message;
+      }
+    });
+  </script>
+</body>
+</html>
