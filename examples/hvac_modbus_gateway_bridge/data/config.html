@@ -1,66 +1,239 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>HVAC Gateway Config</title>
+  <title>HVAC Gateway - Configuration</title>
   <style>
-    :root { --bg:#101319; --panel:#171b22; --line:#2b3344; --text:#e6edf3; --muted:#9fb1c7; --ok:#2ea043; --alt:#1f6feb; }
-    body { margin:0; font-family:Arial,sans-serif; background:var(--bg); color:var(--text); }
-    .wrap { max-width:1050px; margin:0 auto; padding:14px; }
-    nav { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; }
-    a { color:#101319; background:#d0d7de; padding:6px 9px; border-radius:6px; text-decoration:none; font-weight:600; }
-    .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px; margin:10px 0; }
-    h2 { margin:6px 0 10px; }
-    h3 { margin:4px 0 10px; color:var(--muted); font-size:15px; font-weight:700; }
-    .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
-    .field { display:flex; flex-direction:column; gap:4px; }
-    .field label { font-size:12px; color:var(--muted); font-weight:700; letter-spacing:.2px; }
-    input, select, button {
-      width:100%; box-sizing:border-box; padding:8px; border-radius:7px;
-      border:1px solid #3a4458; background:#0f141b; color:var(--text);
+    :root {
+      --bg: #0d1117;
+      --card: #161b22;
+      --border: #30363d;
+      --text: #c9d1d9;
+      --text-muted: #8b949e;
+      --accent: #58a6ff;
+      --accent-hover: #1f6feb;
+      --success: #238636;
+      --success-hover: #2ea043;
+      --input-bg: #010409;
     }
-    button { cursor:pointer; border:0; font-weight:700; background:var(--ok); color:#fff; }
-    button.alt { background:var(--alt); }
-    button:disabled { opacity:.65; cursor:not-allowed; }
-    .scan-row { display:grid; grid-template-columns:1fr auto; gap:10px; align-items:end; }
-    .scan-status { display:flex; gap:8px; align-items:center; margin-top:8px; font-size:12px; color:var(--muted); }
-    .hint { font-size:12px; color:var(--muted); margin-top:4px; }
-    .spin { width:13px; height:13px; border:2px solid #3a4458; border-top-color:var(--alt); border-radius:50%; visibility:hidden; animation:sp .8s linear infinite; }
-    @keyframes sp { to { transform:rotate(360deg); } }
-    pre { margin:0; white-space:pre-wrap; word-break:break-word; background:#0f141b; border:1px solid #3a4458; padding:8px; border-radius:7px; }
-    @media (max-width: 860px) { .grid2 { grid-template-columns:1fr; } .scan-row { grid-template-columns:1fr; } }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    .wrap {
+      max-width: 1000px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    nav {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 24px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+      overflow-x: auto;
+    }
+    nav a {
+      color: var(--text);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 500;
+      padding: 6px 12px;
+      border-radius: 6px;
+      transition: background 0.2s;
+      white-space: nowrap;
+    }
+    nav a:hover {
+      background: var(--border);
+    }
+    nav a.active {
+      color: var(--accent);
+      background: rgba(88, 166, 255, 0.1);
+    }
+    h1 {
+      font-size: 24px;
+      font-weight: 600;
+      margin: 0 0 20px;
+    }
+    h2 {
+      font-size: 16px;
+      font-weight: 600;
+      margin: 0 0 16px;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 8px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 24px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 16px;
+    }
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    label {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-muted);
+    }
+    input, select {
+      background: var(--input-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      padding: 8px 12px;
+      font-size: 14px;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    input:focus, select:focus {
+      outline: none;
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(88, 166, 255, 0.3);
+    }
+    button {
+      cursor: pointer;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 16px;
+      font-size: 14px;
+      font-weight: 600;
+      transition: 0.2s;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    .btn-primary {
+      background: var(--success);
+      color: #fff;
+      border-color: rgba(240, 246, 252, 0.1);
+    }
+    .btn-primary:hover {
+      background: var(--success-hover);
+    }
+    .btn-alt {
+      background: #21262d;
+      color: var(--accent);
+      border-color: var(--border);
+    }
+    .btn-alt:hover {
+      background: #30363d;
+      border-color: #8b949e;
+    }
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .hint {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+    pre {
+      margin: 16px 0 0;
+      padding: 12px;
+      background: var(--input-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-family: monospace;
+      font-size: 12px;
+      color: #79c0ff;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .scan-row {
+      display: flex;
+      gap: 12px;
+      align-items: flex-end;
+      margin-bottom: 16px;
+    }
+    .scan-row .field { flex: 1; }
+    .status-area {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 12px;
+      font-size: 13px;
+    }
+    .spin {
+      width: 14px;
+      height: 14px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      display: none;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (max-width: 600px) {
+      .wrap { padding: 12px; }
+      .scan-row { flex-direction: column; align-items: stretch; }
+      .grid { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <nav><a href="/">Home</a><a href="/config">Config</a><a href="/monitor">Monitor</a><a href="/firmware">Firmware</a></nav>
-    <h2>Gateway Configuration</h2>
+    <nav>
+      <a href="/">Dashboard</a>
+      <a href="/config" class="active">Configuration</a>
+      <a href="/monitor">Zone Monitor</a>
+      <a href="/firmware">Firmware Update</a>
+    </nav>
+    <h1>Gateway Configuration</h1>
 
     <div class="card">
-      <h3>Wi-Fi</h3>
+      <h2>Wi-Fi Settings</h2>
       <div class="scan-row">
         <div class="field">
-          <label for="ssid_select">Available Networks</label>
+          <label for="ssid_select">Nearby Networks</label>
           <select id="ssid_select" onchange="onSsidPick()">
-            <option value="">Scan to list APs</option>
+            <option value="">Scan to see available networks</option>
           </select>
         </div>
-        <button id="scanBtn" class="alt" type="button" onclick="scanWifi()">Scan Wi-Fi</button>
+        <button id="scanBtn" class="btn-alt" type="button" onclick="scanWifi()">Scan Wi-Fi</button>
       </div>
-      <div class="scan-status"><span id="scanSpin" class="spin"></span><span id="scanStatus">Idle</span></div>
+      <div class="status-area">
+        <div id="scanSpin" class="spin"></div>
+        <span id="scanStatus" class="hint">Idle</span>
+      </div>
 
-      <div class="grid2">
-        <div class="field"><label for="ssid">SSID</label><input id="ssid" placeholder="Your Wi-Fi SSID"></div>
-        <div class="field"><label for="password">Password</label><input id="password" type="password" placeholder="Wi-Fi password"></div>
+      <div class="grid" style="margin-top: 16px;">
+        <div class="field">
+          <label for="ssid">SSID</label>
+          <input id="ssid" placeholder="Network name">
+        </div>
+        <div class="field">
+          <label for="password">Password</label>
+          <input id="password" type="password" placeholder="••••••••">
+        </div>
       </div>
     </div>
 
     <div class="card">
-      <h3>System + HVAC</h3>
-      <div class="grid2">
-        <div class="field"><label for="device_id">Device ID</label><input id="device_id" placeholder="hvac-modbus-gateway-bridge"></div>
-        <div class="field"><label for="gateway_type">Gateway Type</label>
+      <h2>System & HVAC</h2>
+      <div class="grid">
+        <div class="field">
+          <label for="device_id">Device ID</label>
+          <input id="device_id">
+        </div>
+        <div class="field">
+          <label for="gateway_type">Gateway Type</label>
           <select id="gateway_type">
             <option value="lg_pmbusb00a">LG PMBUSB00A</option>
             <option value="midea_gw3_mod">Midea GW3-MOD</option>
@@ -69,57 +242,75 @@
           </select>
           <div id="gateway_hint" class="hint"></div>
         </div>
-      </div>
-      <div class="grid2">
-        <div class="field"><label for="zones">Zones CSV</label><input id="zones" placeholder="1:0,1:1,1:2"></div>
-        <div class="field"><label for="idu_address_base">IDU Address Base (0 or 1)</label><input id="idu_address_base" type="number" min="0" max="1"></div>
-      </div>
-      <div class="grid2">
-        <div class="field"><label for="poll_interval_ms">Poll Interval (ms)</label><input id="poll_interval_ms" type="number"></div>
-        <div class="field"><label for="mode_rate_limit_ms">Mode Rate Limit (ms)</label><input id="mode_rate_limit_ms" type="number"></div>
-      </div>
-      <div class="grid2">
-        <div class="field"><label for="setpoint_min_tenths">Setpoint Min (x10 C)</label><input id="setpoint_min_tenths" type="number"></div>
-        <div class="field"><label for="setpoint_max_tenths">Setpoint Max (x10 C)</label><input id="setpoint_max_tenths" type="number"></div>
-      </div>
-      <div class="grid2">
-        <div class="field"><label for="log_level">Log Level</label><input id="log_level" type="number"></div>
-        <div class="field"><label for="default_slave_id">Default Modbus Slave</label><input id="default_slave_id" type="number" min="1" max="247"></div>
+        <div class="field">
+          <label for="zones">Zones (slave:address, ...)</label>
+          <input id="zones" placeholder="1:0, 1:1, 1:2">
+        </div>
+        <div class="field">
+          <label for="idu_address_base">IDU Address Base</label>
+          <input id="idu_address_base" type="number" min="0" max="1">
+        </div>
+        <div class="field">
+          <label for="poll_interval_ms">Poll Interval (ms)</label>
+          <input id="poll_interval_ms" type="number">
+        </div>
+        <div class="field">
+          <label for="mode_rate_limit_ms">Mode Rate Limit (ms)</label>
+          <input id="mode_rate_limit_ms" type="number">
+        </div>
+        <div class="field">
+          <label for="setpoint_min_tenths">Setpoint Min (x10°C)</label>
+          <input id="setpoint_min_tenths" type="number">
+        </div>
+        <div class="field">
+          <label for="setpoint_max_tenths">Setpoint Max (x10°C)</label>
+          <input id="setpoint_max_tenths" type="number">
+        </div>
+        <div class="field">
+          <label for="log_level">Log Level</label>
+          <input id="log_level" type="number">
+        </div>
+        <div class="field">
+          <label for="default_slave_id">Default Slave ID</label>
+          <input id="default_slave_id" type="number" min="1" max="247">
+        </div>
       </div>
     </div>
 
     <div class="card">
-      <h3>Modbus / RS-485</h3>
-      <div class="grid2">
+      <h2>Modbus / RS-485</h2>
+      <div class="grid">
         <div class="field"><label for="tx_pin">TX Pin</label><input id="tx_pin" type="number"></div>
         <div class="field"><label for="rx_pin">RX Pin</label><input id="rx_pin" type="number"></div>
-      </div>
-      <div class="grid2">
         <div class="field"><label for="de_pin">DE Pin</label><input id="de_pin" type="number"></div>
         <div class="field"><label for="baud">Baud Rate</label><input id="baud" type="number"></div>
-      </div>
-      <div class="grid2">
         <div class="field"><label for="timeout_ms">Timeout (ms)</label><input id="timeout_ms" type="number"></div>
         <div class="field"><label for="retries">Retries</label><input id="retries" type="number"></div>
       </div>
     </div>
 
     <div class="card">
-      <h3>OTA</h3>
-      <div class="grid2">
-        <div class="field"><label for="ota_firmware_url">Firmware URL</label><input id="ota_firmware_url" placeholder="https://host/firmware.bin"></div>
-        <div class="field"><label for="ota_filesystem_url">Filesystem URL</label><input id="ota_filesystem_url" placeholder="https://host/spiffs.bin"></div>
+      <h2>OTA Settings</h2>
+      <div class="grid">
+        <div class="field">
+          <label for="ota_firmware_url">Firmware URL</label>
+          <input id="ota_firmware_url" placeholder="https://...">
+        </div>
+        <div class="field">
+          <label for="ota_filesystem_url">Filesystem URL</label>
+          <input id="ota_filesystem_url" placeholder="https://...">
+        </div>
       </div>
-      <div class="grid2">
-        <button type="button" class="alt" onclick="startOta('firmware')">Start Firmware OTA</button>
-        <button type="button" class="alt" onclick="startOta('filesystem')">Start Filesystem OTA</button>
+      <div class="grid" style="margin-top: 16px;">
+        <button type="button" class="btn-alt" onclick="startOta('firmware')">Start Firmware OTA</button>
+        <button type="button" class="btn-alt" onclick="startOta('filesystem')">Start Filesystem OTA</button>
       </div>
-      <pre id="ota_status">OTA idle</pre>
+      <pre id="ota_status">OTA Idle</pre>
     </div>
 
-    <div class="card">
-      <button type="button" onclick="saveConfig()">Save Config and Reboot</button>
-      <pre id="status">Ready</pre>
+    <div class="card" style="text-align: right;">
+      <button type="button" class="btn-primary" style="width: 100%; max-width: 300px;" onclick="saveConfig()">Save & Reboot</button>
+      <pre id="status" style="text-align: left;">Ready</pre>
     </div>
   </div>
 
@@ -130,175 +321,119 @@
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(b)
     }).then((r) => r.json());
+
     const GW = {
-      lg_pmbusb00a: {
-        iduBase: 0,
-        spMin: 160,
-        spMax: 300,
-        zonesPlaceholder: "1:0,1:1,1:2",
-        hint: "LG: IDU base can be 0 or 1 depending on site setup."
-      },
-      midea_gw3_mod: {
-        iduBase: 0,
-        spMin: 160,
-        spMax: 300,
-        zonesPlaceholder: "1:0,1:1,1:2",
-        hint: "Midea: IDU base fixed to 0 in this firmware profile."
-      },
-      daikin_dta116a51: {
-        iduBase: 0,
-        spMin: 160,
-        spMax: 300,
-        zonesPlaceholder: "1:0,1:1,1:2",
-        hint: "Daikin DTA116A51 (d3net map): IDU base fixed to 0."
-      },
-      hitachi_hca_mb: {
-        iduBase: 0,
-        spMin: 160,
-        spMax: 320,
-        zonesPlaceholder: "1:0,1:1,1:2",
-        hint: "Hitachi HC-A(8/16/64)MB indoor map (N=2000 + address*32 + offset), IDU base fixed to 0."
-      }
+      lg_pmbusb00a: { iduBase: 0, spMin: 160, spMax: 300, hint: "LG: IDU base can be 0 or 1 depending on site." },
+      midea_gw3_mod: { iduBase: 0, spMin: 160, spMax: 300, hint: "Midea: IDU base fixed to 0." },
+      daikin_dta116a51: { iduBase: 0, spMin: 160, spMax: 300, hint: "Daikin: IDU base fixed to 0." },
+      hitachi_hca_mb: { iduBase: 0, spMin: 160, spMax: 320, hint: "Hitachi: IDU base fixed to 0." }
     };
 
     function setScanState(active, msg) {
-      const spin = document.getElementById("scanSpin");
-      const btn = document.getElementById("scanBtn");
-      const st = document.getElementById("scanStatus");
-      spin.style.visibility = active ? "visible" : "hidden";
-      btn.disabled = active;
-      st.textContent = msg;
+      document.getElementById("scanSpin").style.display = active ? "block" : "none";
+      document.getElementById("scanBtn").disabled = active;
+      document.getElementById("scanStatus").textContent = msg;
     }
 
     function onSsidPick() {
       const sel = document.getElementById("ssid_select");
-      if (sel.value) {
-        document.getElementById("ssid").value = sel.value;
-      }
+      if (sel.value) document.getElementById("ssid").value = sel.value;
     }
 
     function applyGatewayProfile(gw, hardApply) {
       const p = GW[gw] || GW.lg_pmbusb00a;
-      gateway_hint.textContent = p.hint;
-      zones.placeholder = p.zonesPlaceholder;
+      document.getElementById("gateway_hint").textContent = p.hint;
       if (hardApply) {
-        idu_address_base.value = p.iduBase;
-        setpoint_min_tenths.value = p.spMin;
-        setpoint_max_tenths.value = p.spMax;
+        document.getElementById("idu_address_base").value = p.iduBase;
+        document.getElementById("setpoint_min_tenths").value = p.spMin;
+        document.getElementById("setpoint_max_tenths").value = p.spMax;
       }
     }
 
     async function loadConfig() {
       const c = await J("/api/config");
-      ssid.value = c.wifi.ssid || "";
-      password.value = "";
-      zones.value = (c.hvac.zones || []).map((z) => `${z.slave}:${z.central_address}`).join(",");
-      idu_address_base.value = c.hvac.idu_address_base;
-      gateway_type.value = c.hvac.gateway_type || "lg_pmbusb00a";
-      device_id.value = c.device_id || "hvac-modbus-gateway-bridge";
-      poll_interval_ms.value = c.hvac.poll_interval_ms;
-      default_slave_id.value = c.modbus.default_slave;
-      tx_pin.value = c.modbus.tx;
-      rx_pin.value = c.modbus.rx;
-      de_pin.value = c.modbus.de;
-      baud.value = c.modbus.baud;
-      timeout_ms.value = c.modbus.timeout_ms;
-      retries.value = c.modbus.retries;
-      setpoint_min_tenths.value = c.hvac.setpoint_min_tenths;
-      setpoint_max_tenths.value = c.hvac.setpoint_max_tenths;
-      mode_rate_limit_ms.value = c.hvac.mode_rate_limit_ms;
-      log_level.value = c.log_level;
-      ota_firmware_url.value = (c.ota && c.ota.firmware_url) || "";
-      ota_filesystem_url.value = (c.ota && c.ota.filesystem_url) || "";
-      applyGatewayProfile(gateway_type.value, false);
-      refreshOtaStatus();
+      document.getElementById("ssid").value = c.wifi.ssid || "";
+      document.getElementById("zones").value = (c.hvac.zones || []).map((z) => `${z.slave}:${z.central_address}`).join(",");
+      document.getElementById("idu_address_base").value = c.hvac.idu_address_base;
+      document.getElementById("gateway_type").value = c.hvac.gateway_type || "lg_pmbusb00a";
+      document.getElementById("device_id").value = c.device_id || "";
+      document.getElementById("poll_interval_ms").value = c.hvac.poll_interval_ms;
+      document.getElementById("default_slave_id").value = c.modbus.default_slave;
+      document.getElementById("tx_pin").value = c.modbus.tx;
+      document.getElementById("rx_pin").value = c.modbus.rx;
+      document.getElementById("de_pin").value = c.modbus.de;
+      document.getElementById("baud").value = c.modbus.baud;
+      document.getElementById("timeout_ms").value = c.modbus.timeout_ms;
+      document.getElementById("retries").value = c.modbus.retries;
+      document.getElementById("setpoint_min_tenths").value = c.hvac.setpoint_min_tenths;
+      document.getElementById("setpoint_max_tenths").value = c.hvac.setpoint_max_tenths;
+      document.getElementById("mode_rate_limit_ms").value = c.hvac.mode_rate_limit_ms;
+      document.getElementById("log_level").value = c.log_level;
+      document.getElementById("ota_firmware_url").value = (c.ota && c.ota.firmware_url) || "";
+      document.getElementById("ota_filesystem_url").value = (c.ota && c.ota.filesystem_url) || "";
+      applyGatewayProfile(document.getElementById("gateway_type").value, false);
     }
 
     async function scanWifi() {
-      setScanState(true, "Scanning Wi-Fi networks...");
+      setScanState(true, "Scanning...");
       try {
-        const ac = new AbortController();
-        const t = setTimeout(() => ac.abort(), 14000);
-        const r = await fetch("/api/wifi/scan", { signal: ac.signal }).then((x) => x.json());
-        clearTimeout(t);
-        const list = (r && (r.items || r.networks)) || [];
+        const r = await fetch("/api/wifi/scan").then((x) => x.json());
+        const list = r.items || r.networks || [];
         const s = document.getElementById("ssid_select");
-        s.innerHTML = "";
-        const first = document.createElement("option");
-        first.value = "";
-        first.text = list.length ? "Select SSID" : "No AP found";
-        s.appendChild(first);
-
-        for (const ap of list) {
+        s.innerHTML = '<option value="">Select SSID</option>';
+        list.forEach(ap => {
           const o = document.createElement("option");
-          o.value = ap.ssid || "";
-          o.text = `${ap.ssid || "<hidden>"} (${ap.rssi})`;
+          o.value = ap.ssid;
+          o.text = `${ap.ssid} (${ap.rssi}dBm)`;
           s.appendChild(o);
-        }
-        const ok = r && (r.ok === undefined || r.ok === true);
-        if (ok) {
-          setScanState(false, `Scan complete: ${list.length} AP(s)`);
-        } else {
-          const info = r.err_name ? ` (${r.err_name})` : "";
-          setScanState(false, `Scan failed${info}`);
-        }
+        });
+        setScanState(false, `Found ${list.length} networks`);
       } catch (e) {
-        setScanState(false, e && e.name === "AbortError" ? "Scan timed out" : "Scan failed");
+        setScanState(false, "Scan failed");
       }
     }
 
     async function saveConfig() {
       const body = {
-        ssid: ssid.value,
-        password: password.value,
-        zones: zones.value,
-        gateway_type: gateway_type.value,
-        device_id: device_id.value,
-        idu_address_base: +idu_address_base.value,
-        poll_interval_ms: +poll_interval_ms.value,
-        default_slave_id: +default_slave_id.value,
-        tx_pin: +tx_pin.value,
-        rx_pin: +rx_pin.value,
-        de_pin: +de_pin.value,
-        baud: +baud.value,
-        timeout_ms: +timeout_ms.value,
-        retries: +retries.value,
-        setpoint_min_tenths: +setpoint_min_tenths.value,
-        setpoint_max_tenths: +setpoint_max_tenths.value,
-        mode_rate_limit_ms: +mode_rate_limit_ms.value,
-        log_level: +log_level.value,
-        ota_firmware_url: ota_firmware_url.value.trim(),
-        ota_filesystem_url: ota_filesystem_url.value.trim()
+        ssid: document.getElementById("ssid").value,
+        password: document.getElementById("password").value,
+        zones: document.getElementById("zones").value,
+        gateway_type: document.getElementById("gateway_type").value,
+        device_id: document.getElementById("device_id").value,
+        idu_address_base: +document.getElementById("idu_address_base").value,
+        poll_interval_ms: +document.getElementById("poll_interval_ms").value,
+        default_slave_id: +document.getElementById("default_slave_id").value,
+        tx_pin: +document.getElementById("tx_pin").value,
+        rx_pin: +document.getElementById("rx_pin").value,
+        de_pin: +document.getElementById("de_pin").value,
+        baud: +document.getElementById("baud").value,
+        timeout_ms: +document.getElementById("timeout_ms").value,
+        retries: +document.getElementById("retries").value,
+        setpoint_min_tenths: +document.getElementById("setpoint_min_tenths").value,
+        setpoint_max_tenths: +document.getElementById("setpoint_max_tenths").value,
+        mode_rate_limit_ms: +document.getElementById("mode_rate_limit_ms").value,
+        log_level: +document.getElementById("log_level").value,
+        ota_firmware_url: document.getElementById("ota_firmware_url").value,
+        ota_filesystem_url: document.getElementById("ota_filesystem_url").value
       };
       const r = await P("/api/config/save", body);
-      status.textContent = JSON.stringify(r, null, 2);
-    }
-
-    async function refreshOtaStatus() {
-      try {
-        const s = await J("/api/ota/status");
-        ota_status.textContent = JSON.stringify(s, null, 2);
-      } catch (_e) {
-        ota_status.textContent = "Failed to fetch OTA status";
-      }
+      document.getElementById("status").textContent = JSON.stringify(r, null, 2);
     }
 
     async function startOta(type) {
-      const body = { type: type };
-      if (type === "firmware") {
-        body.url = ota_firmware_url.value.trim();
-      } else {
-        body.url = ota_filesystem_url.value.trim();
-      }
-      const r = await P("/api/ota/start", body);
-      ota_status.textContent = JSON.stringify(r, null, 2);
-      setTimeout(refreshOtaStatus, 500);
+      const url = type === 'firmware' ? document.getElementById("ota_firmware_url").value : document.getElementById("ota_filesystem_url").value;
+      const r = await P("/api/ota/start", { type, url });
+      document.getElementById("ota_status").textContent = JSON.stringify(r, null, 2);
     }
 
     loadConfig();
-    gateway_type.addEventListener("change", () => applyGatewayProfile(gateway_type.value, true));
-    setScanState(false, "Idle");
-    setInterval(refreshOtaStatus, 2000);
+    document.getElementById("gateway_type").addEventListener("change", (e) => applyGatewayProfile(e.target.value, true));
+    setInterval(async () => {
+      try {
+        const s = await J("/api/ota/status");
+        document.getElementById("ota_status").textContent = JSON.stringify(s, null, 2);
+      } catch(e) {}
+    }, 2000);
   </script>
 </body>
 </html>
