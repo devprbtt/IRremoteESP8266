@@ -123,6 +123,8 @@ struct TempSensorConfig {
   bool enabled = false;
   uint8_t gpio = 4;
   uint16_t readIntervalSec = 10;
+  uint8_t precision = 2;  // 0-2 decimal places.
+  String names[kMaxTempSensors];
 };
 
 struct EthernetConfig {
@@ -255,6 +257,10 @@ void setupTemperatureSensors();
 void readTemperatureSensors();
 void handleTemperatureSensors();
 bool hvacUsesSensorTemp(const HvacConfig &h);
+String sensorNameForIndex(uint8_t idx);
+String sensorAddressToString(const DeviceAddress addr);
+uint8_t tempSensorPrecision();
+float applyTempSensorPrecision(float value);
 void setupIrReceiver();
 void handleIrReceiver();
 String normalizeIrReceiverMode(const String &modeIn);
@@ -273,6 +279,7 @@ String buildGcFromCapture(const decode_results &capture, uint32_t frequency);
 String buildRacepointFromCapture(const decode_results &capture, uint32_t frequency);
 String buildCodeFromCaptureEncoding(const decode_results &capture, const String &encodingIn);
 String customCommandNamesSummary(const HvacConfig &h);
+uint8_t activeTelnetClientCount();
 
 // ---- Helpers ----
 
@@ -286,6 +293,44 @@ bool checkAuth() {
 void requestAuth() {
   if (!isAuthRequired()) return;
   web.requestAuthentication();
+}
+
+uint8_t activeTelnetClientCount() {
+  uint8_t count = 0;
+  for (uint8_t i = 0; i < kMaxTelnetClients; i++) {
+    if (telnetClients[i] && telnetClients[i].connected()) count++;
+  }
+  return count;
+}
+
+String sensorNameForIndex(uint8_t idx) {
+  if (idx >= kMaxTempSensors) return "";
+  String name = config.tempSensors.names[idx];
+  name.trim();
+  if (name.length()) return name;
+  return "Sensor " + String(idx);
+}
+
+String sensorAddressToString(const DeviceAddress addr) {
+  String out;
+  for (uint8_t i = 0; i < 8; i++) {
+    if (addr[i] < 0x10) out += "0";
+    out += String(addr[i], HEX);
+  }
+  out.toUpperCase();
+  return out;
+}
+
+uint8_t tempSensorPrecision() {
+  return (config.tempSensors.precision <= 2) ? config.tempSensors.precision : 2;
+}
+
+float applyTempSensorPrecision(float value) {
+  uint8_t p = tempSensorPrecision();
+  float scale = 1.0f;
+  if (p == 1) scale = 10.0f;
+  else if (p == 2) scale = 100.0f;
+  return roundf(value * scale) / scale;
 }
 
 void printMonitorStatus() {
@@ -779,6 +824,9 @@ String configToJsonString() {
   ts["enabled"] = config.tempSensors.enabled;
   ts["gpio"] = config.tempSensors.gpio;
   ts["read_interval_sec"] = config.tempSensors.readIntervalSec;
+  ts["precision"] = tempSensorPrecision();
+  JsonArray tsNames = ts["names"].to<JsonArray>();
+  for (uint8_t i = 0; i < kMaxTempSensors; i++) tsNames.add(config.tempSensors.names[i]);
 
   JsonObject eth = doc["ethernet"].to<JsonObject>();
   eth["enabled"] = config.eth.enabled;
@@ -880,6 +928,8 @@ void clearConfig() {
   config.tempSensors.enabled = false;
   config.tempSensors.gpio = 4;
   config.tempSensors.readIntervalSec = 10;
+  config.tempSensors.precision = 2;
+  for (uint8_t i = 0; i < kMaxTempSensors; i++) config.tempSensors.names[i] = "";
   config.eth.enabled = false;
   config.irReceiver.enabled = false;
   config.irReceiver.gpio = 14;
@@ -980,6 +1030,19 @@ void loadConfig() {
     config.tempSensors.gpio = ts["gpio"] | 4;
     config.tempSensors.readIntervalSec = ts["read_interval_sec"] | 10;
     if (config.tempSensors.readIntervalSec == 0) config.tempSensors.readIntervalSec = 10;
+    uint8_t precision = ts["precision"] | 2;
+    if (precision > 2) precision = 2;
+    config.tempSensors.precision = precision;
+    JsonArray names = ts["names"];
+    if (!names.isNull()) {
+      uint8_t idx = 0;
+      for (JsonVariant v : names) {
+        if (idx >= kMaxTempSensors) break;
+        String n = v.as<String>();
+        n.trim();
+        config.tempSensors.names[idx++] = n;
+      }
+    }
   }
   JsonObject eth = doc["ethernet"];
   if (!eth.isNull()) {
@@ -1019,6 +1082,7 @@ void loadConfig() {
       h.currentTempSource.toLowerCase();
       if (h.currentTempSource != "sensor") h.currentTempSource = "setpoint";
       h.tempSensorIndex = o["temp_sensor_index"] | 0;
+      if (h.tempSensorIndex >= kMaxTempSensors) h.tempSensorIndex = 0;
       JsonObject c = o["custom"];
       if (!c.isNull()) {
         h.isCustom = true;
@@ -1153,6 +1217,9 @@ int8_t findHvacIndexById(const String &id) {
 
 String normalizeMode(const String &in) {
   String out = in;
+  out.replace("\r", "");
+  out.replace("\n", "");
+  out.trim();
   out.toLowerCase();
   if (out == "cool" || out == "heat" || out == "dry" || out == "fan" ||
       out == "off") return out;
@@ -1161,7 +1228,11 @@ String normalizeMode(const String &in) {
 
 String normalizeFan(const String &in) {
   String out = in;
+  out.replace("\r", "");
+  out.replace("\n", "");
+  out.trim();
   out.toLowerCase();
+  if (out == "auto") return out;
   if (out == "min" || out == "low" || out == "medium" || out == "high" ||
       out == "max") return out;
   return "auto";
@@ -1239,9 +1310,9 @@ void writeStateJson(JsonObject state, const String &id, const HvacRuntimeState &
   HvacConfig *hvac = nullptr;
   if (findHvacById(id, hvac) && hvac) {
     const bool isCustom = hvac->isCustom || hvac->protocol == "CUSTOM";
-    state["protocol"] = isCustom ? "CUSTOM" : hvac->protocol;
-    state["custom"] = isCustom;
     if (isCustom) {
+      state["protocol"] = "CUSTOM";
+      state["custom"] = true;
       JsonArray commands = state["custom_commands"].to<JsonArray>();
       for (uint8_t i = 0; i < hvac->customCommandCount; i++) {
         JsonObject c = commands.add<JsonObject>();
@@ -1349,7 +1420,7 @@ void sendTelnetJson(WiFiClient &client, JsonDocument &doc) {
   String payload;
   payload.reserve(512);
   serializeJson(doc, payload);
-  payload += '\n';
+  payload += "\r\n";
   client.print(payload);
 }
 
@@ -1662,6 +1733,36 @@ void handleHome() {
             htmlEscape(normalizeIrReceiverMode(config.irReceiver.mode)) + "</strong></p>";
   }
   html += "<p>HVACs: <strong>" + String(config.hvacCount) + "</strong></p></div>";
+  html += "<div class='card'><h3>Telnet Connections</h3>";
+  uint8_t activeTelnet = activeTelnetClientCount();
+  html += "<p>Active clients: <strong>" + String(activeTelnet) + "</strong></p>";
+  if (activeTelnet > 0) {
+    html += "<table><tr><th>Slot</th><th>Remote IP</th><th>Remote Port</th></tr>";
+    for (uint8_t i = 0; i < kMaxTelnetClients; i++) {
+      WiFiClient &c = telnetClients[i];
+      if (!c || !c.connected()) continue;
+      html += "<tr><td>" + String(i) + "</td><td>" + c.remoteIP().toString() + "</td><td>" + String(c.remotePort()) + "</td></tr>";
+    }
+    html += "</table>";
+  }
+  html += "</div>";
+  if (config.tempSensors.enabled) {
+    html += "<div class='card'><h3>Detected Temperature Sensors</h3>";
+    if (tempSensorCount == 0) {
+      html += "<p>No sensors detected.</p>";
+    } else {
+      html += "<table><tr><th>Index</th><th>Name</th><th>Address</th><th>Current Temp (C)</th></tr>";
+      for (uint8_t i = 0; i < tempSensorCount; i++) {
+        html += "<tr><td>" + String(i) + "</td><td>" + htmlEscape(sensorNameForIndex(i)) + "</td><td>" +
+                htmlEscape(sensorAddressToString(tempSensorAddresses[i])) + "</td><td>";
+        if (tempSensorValid[i]) html += String(tempSensorReadings[i], static_cast<unsigned int>(tempSensorPrecision()));
+        else html += "N/A";
+        html += "</td></tr>";
+      }
+      html += "</table>";
+    }
+    html += "</div>";
+  }
   html += pageFooter();
   web.send(200, "text/html", html);
 }
@@ -1716,7 +1817,28 @@ void handleConfigPage() {
   html += "<input name='ts_gpio' type='number' min='0' max='39' value='" + String(config.tempSensors.gpio) + "'>";
   html += "<label>Read interval (seconds)</label>";
   html += "<input name='ts_interval' type='number' min='1' max='3600' value='" + String(config.tempSensors.readIntervalSec) + "'>";
+  html += "<label>Temperature decimals (0-2)</label>";
+  html += "<select name='ts_precision'>";
+  html += "<option value='0'" + String(tempSensorPrecision() == 0 ? " selected" : "") + ">0</option>";
+  html += "<option value='1'" + String(tempSensorPrecision() == 1 ? " selected" : "") + ">1</option>";
+  html += "<option value='2'" + String(tempSensorPrecision() == 2 ? " selected" : "") + ">2</option>";
+  html += "</select>";
   html += "<p>Detected sensors at runtime: <strong>" + String(tempSensorCount) + "</strong></p>";
+  html += "<label>Sensor Names</label>";
+  if (tempSensorCount == 0) {
+    html += "<p>No sensors detected yet. Names can be set once sensors are detected.</p>";
+  } else {
+    html += "<table><tr><th>Index</th><th>Name</th><th>Address</th><th>Current Temp (C)</th></tr>";
+    for (uint8_t i = 0; i < tempSensorCount; i++) {
+      html += "<tr><td>" + String(i) + "</td><td><input name='ts_name_" + String(i) + "' value='" +
+              htmlEscape(config.tempSensors.names[i]) + "' placeholder='Sensor " + String(i) + "'></td><td>" +
+              htmlEscape(sensorAddressToString(tempSensorAddresses[i])) + "</td><td>";
+      if (tempSensorValid[i]) html += String(tempSensorReadings[i], static_cast<unsigned int>(tempSensorPrecision()));
+      else html += "N/A";
+      html += "</td></tr>";
+    }
+    html += "</table>";
+  }
   html += "<h3>Ethernet (WT32 LAN8720)</h3>";
   html += "<div class='row'><input type='checkbox' id='ethEnabled' name='eth_enabled'" +
           String(config.eth.enabled ? " checked" : "") + "><label for='ethEnabled'>Enable Ethernet</label></div>";
@@ -1780,6 +1902,15 @@ void handleConfigSave() {
   uint16_t tsInterval = web.arg("ts_interval").toInt();
   if (tsInterval == 0) tsInterval = 10;
   config.tempSensors.readIntervalSec = tsInterval;
+  uint8_t tsPrecision = static_cast<uint8_t>(web.arg("ts_precision").toInt());
+  if (tsPrecision > 2) tsPrecision = 2;
+  config.tempSensors.precision = tsPrecision;
+  for (uint8_t i = 0; i < kMaxTempSensors; i++) {
+    String key = "ts_name_" + String(i);
+    String name = web.arg(key);
+    name.trim();
+    config.tempSensors.names[i] = name;
+  }
   config.eth.enabled = web.hasArg("eth_enabled");
   config.irReceiver.enabled = web.hasArg("irrx_enabled");
   int irrxGpio = web.arg("irrx_gpio").toInt();
@@ -2217,9 +2348,17 @@ void handleHvacsAdd() {
   }
   h.emitterIndex = web.arg("emitter").toInt();
   h.model = web.arg("model").toInt();
-  h.currentTempSource = "setpoint";
-  h.tempSensorIndex = 0;
+  h.currentTempSource = web.arg("current_temp_source");
+  h.currentTempSource.toLowerCase();
+  if (h.currentTempSource != "sensor") h.currentTempSource = "setpoint";
+  uint16_t sensorIndex = web.arg("temp_sensor_index").toInt();
+  if (sensorIndex >= kMaxTempSensors) sensorIndex = 0;
+  h.tempSensorIndex = static_cast<uint8_t>(sensorIndex);
   h.isCustom = (h.protocol == "CUSTOM");
+  if (h.isCustom) h.currentTempSource = "setpoint";
+  if (h.currentTempSource == "sensor" && (tempSensorCount == 0 || h.tempSensorIndex >= tempSensorCount)) {
+    h.currentTempSource = "setpoint";
+  }
   if (h.isCustom) loadCustomCommandsFromRequest(h);
   else h.customCommandCount = 0;
   initHvacRuntimeStates();
@@ -2323,6 +2462,9 @@ void handleHvacsUpdate() {
   uint16_t sensorIndex = web.arg("temp_sensor_index").toInt();
   if (sensorIndex >= kMaxTempSensors) sensorIndex = 0;
   h.tempSensorIndex = static_cast<uint8_t>(sensorIndex);
+  if (h.currentTempSource == "sensor" && (tempSensorCount == 0 || h.tempSensorIndex >= tempSensorCount)) {
+    h.currentTempSource = "setpoint";
+  }
   h.isCustom = (protocol == "CUSTOM");
   if (h.isCustom) loadCustomCommandsFromRequest(h);
   else h.customCommandCount = 0;
@@ -2658,8 +2800,28 @@ void handleApiStatus() {
   doc["hvac_count"] = config.hvacCount;
   doc["ir_receiver_enabled"] = config.irReceiver.enabled;
   doc["ir_receiver_gpio"] = config.irReceiver.gpio;
+  doc["telnet_clients_active"] = activeTelnetClientCount();
+  JsonArray telnetClientsJson = doc["telnet_clients"].to<JsonArray>();
+  for (uint8_t i = 0; i < kMaxTelnetClients; i++) {
+    WiFiClient &c = telnetClients[i];
+    if (!c || !c.connected()) continue;
+    JsonObject tc = telnetClientsJson.add<JsonObject>();
+    tc["slot"] = i;
+    tc["ip"] = c.remoteIP().toString();
+    tc["port"] = c.remotePort();
+  }
   doc["temp_sensors_enabled"] = config.tempSensors.enabled;
   doc["temp_sensor_count"] = tempSensorCount;
+  doc["temp_sensor_precision"] = tempSensorPrecision();
+  JsonArray sensors = doc["temp_sensors"].to<JsonArray>();
+  for (uint8_t i = 0; i < tempSensorCount; i++) {
+    JsonObject s = sensors.add<JsonObject>();
+    s["index"] = i;
+    s["name"] = sensorNameForIndex(i);
+    s["address"] = sensorAddressToString(tempSensorAddresses[i]);
+    s["valid"] = tempSensorValid[i];
+    if (tempSensorValid[i]) s["current_temp"] = tempSensorReadings[i];
+  }
   doc["ethernet_enabled"] = config.eth.enabled;
   String out;
   serializeJson(doc, out);
@@ -3875,7 +4037,7 @@ void readTemperatureSensors() {
     float t = tempBus->getTempC(tempSensorAddresses[i]);
     bool valid = (t != DEVICE_DISCONNECTED_C) && (t > -100.0f) && (t < 150.0f);
     tempSensorValid[i] = valid;
-    if (valid) tempSensorReadings[i] = t;
+    if (valid) tempSensorReadings[i] = applyTempSensorPrecision(t);
   }
 }
 
