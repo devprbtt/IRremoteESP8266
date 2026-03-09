@@ -365,6 +365,10 @@
             <div class="field"><label>Emitter</label><select name="emitter" id="add_emitter"></select></div>
             <div class="field"><label>Model</label><input name="model" value="-1"></div>
           </div>
+          <div class="form-grid cols-3" style="margin-top:12px;">
+            <div class="field"><label>Temp Source</label><select name="current_temp_source" id="add_temp_source"><option value="setpoint">setpoint</option><option value="sensor">sensor</option></select></div>
+            <div class="field"><label>Temp Sensor</label><select name="temp_sensor_index" id="add_temp_index"></select></div>
+          </div>
           <div id="add_custom" class="subcard" style="display:none">
             <div class="subcard-title">Custom Commands</div>
             <div id="add_commands"></div>
@@ -400,7 +404,7 @@
           </div>
           <div class="form-grid cols-3" style="margin-top:12px;">
             <div class="field"><label>Temp Source</label><select name="current_temp_source" id="edit_temp_source"><option value="setpoint">setpoint</option><option value="sensor">sensor</option></select></div>
-            <div class="field"><label>Sensor Index</label><input name="temp_sensor_index" id="edit_temp_index" type="number" min="0" max="7" value="0"></div>
+            <div class="field"><label>Temp Sensor</label><select name="temp_sensor_index" id="edit_temp_index"></select></div>
             <div class="field"><label>DINplug Keypads</label><input name="din_keypad_ids" id="edit_keypads" placeholder="10,11"></div>
           </div>
           <div id="edit_custom" class="subcard" style="display:none">
@@ -477,7 +481,7 @@
     const byId = id => document.getElementById(id);
     const DINACTIONS = ["none","temp_up","temp_down","set_temp","power_on","power_off","toggle_power","mode_heat","mode_cool","mode_fan","mode_auto","mode_off"];
     const ACTIONS_WITH_VALUE = new Set(["temp_up","temp_down","set_temp"]);
-    let cfg, meta;
+    let cfg, meta, status;
     let activeTab = 'list';
     const commandEditorState = { add: 1, edit: 1 };
 
@@ -499,6 +503,16 @@
     }
     function protocolOpts(sel) {
       return optHtml(meta.protocols || [], v => v, v => v, sel);
+    }
+    function sensorOpts(selected) {
+      const sensors = status?.temp_sensors || [];
+      const precision = Math.max(0, Math.min(2, Number(status?.temp_sensor_precision ?? 2)));
+      if (!sensors.length) return `<option value="0"${String(selected) === '0' ? ' selected' : ''}>No sensors detected</option>`;
+      return sensors.map(s => {
+        const temp = s.valid && Number.isFinite(Number(s.current_temp)) ? `${Number(s.current_temp).toFixed(precision)}C` : 'N/A';
+        const label = `${s.name || ('Sensor ' + s.index)} (idx ${s.index}, ${temp})`;
+        return `<option value="${s.index}"${String(s.index) === String(selected) ? ' selected' : ''}>${label}</option>`;
+      }).join('');
     }
     function usedCommandCount(items) {
       const count = (items || []).filter(c => c && (c.name || c.code)).length;
@@ -601,7 +615,7 @@
       syncBindRow(row);
     };
     async function reloadData() {
-      [cfg, meta] = await Promise.all([J('/api/config'), J('/api/meta')]);
+      [cfg, meta, status] = await Promise.all([J('/api/config'), J('/api/meta'), J('/api/status')]);
     }
     async function refreshPage(keepTab = activeTab) {
       await reloadData();
@@ -634,14 +648,21 @@
     function renderAddForm() {
       byId('add_protocol').innerHTML = protocolOpts('CUSTOM');
       byId('add_emitter').innerHTML = emitterOpts(0);
+      byId('add_temp_source').value = 'setpoint';
+      byId('add_temp_index').innerHTML = sensorOpts(0);
       commandEditorState.add = Math.max(commandEditorState.add || 1, 1);
       renderCommandEditor('add_commands', 'cc', [], 'add');
       syncAddCustom();
     }
     function syncAddCustom() {
-      byId('add_custom').style.display = byId('add_protocol').value === 'CUSTOM' ? 'block' : 'none';
+      const isCustom = byId('add_protocol').value === 'CUSTOM';
+      byId('add_custom').style.display = isCustom ? 'block' : 'none';
+      const tempSource = byId('add_temp_source').value || 'setpoint';
+      byId('add_temp_source').disabled = isCustom;
+      byId('add_temp_index').disabled = isCustom || tempSource !== 'sensor' || !(status?.temp_sensors || []).length;
     }
     byId('add_protocol').addEventListener('change', syncAddCustom);
+    byId('add_temp_source').addEventListener('change', syncAddCustom);
 
     function renderClone() {
       const customs = (cfg.hvacs || []).map((h, i) => ({ h, i })).filter(x => x.h.protocol === 'CUSTOM');
@@ -668,7 +689,10 @@
       byId('edit_emitter').innerHTML = emitterOpts(h.emitter);
       byId('edit_model').value = h.model;
       byId('edit_temp_source').value = h.current_temp_source || 'setpoint';
+      byId('edit_temp_source').disabled = h.protocol === 'CUSTOM';
+      byId('edit_temp_index').innerHTML = sensorOpts(h.temp_sensor_index || 0);
       byId('edit_temp_index').value = h.temp_sensor_index || 0;
+      byId('edit_temp_index').disabled = h.protocol === 'CUSTOM' || byId('edit_temp_source').value !== 'sensor' || !(status?.temp_sensors || []).length;
       byId('edit_keypads').value = h.dinplug?.keypad_ids || '';
       const cmds = h.custom?.commands || [];
       commandEditorState.edit = usedCommandCount(cmds);
@@ -681,6 +705,12 @@
       byId('status_edit').textContent = `Editing: ${h.id}`;
     }
     byId('edit_index').addEventListener('change', syncEdit);
+    byId('edit_temp_source').addEventListener('change', () => {
+      const idx = Number(byId('edit_index').value || 0);
+      const h = (cfg.hvacs || [])[idx];
+      const isCustom = h?.protocol === 'CUSTOM';
+      byId('edit_temp_index').disabled = isCustom || byId('edit_temp_source').value !== 'sensor' || !(status?.temp_sensors || []).length;
+    });
 
     function renderTestForm() {
       byId('test_hvac').innerHTML = (cfg.hvacs || []).map(h => `<option value="${h.id}">${h.id} (${h.protocol})</option>`).join('');

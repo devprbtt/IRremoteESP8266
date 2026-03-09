@@ -315,6 +315,25 @@
           <div class="field"><label>OneWire GPIO</label><input id="ts_gpio" type="number" min="0" max="39"></div>
           <div class="field"><label>Read Interval (sec)</label><input id="ts_interval" type="number" min="1" max="3600"></div>
         </div>
+        <div class="form-grid cols-3" style="margin-top:12px;">
+          <div class="field">
+            <label>Temperature Decimals</label>
+            <select id="ts_precision">
+              <option value="0">0</option>
+              <option value="1">1</option>
+              <option value="2">2</option>
+            </select>
+          </div>
+        </div>
+        <div style="margin-top:12px;">
+          <label>Detected Sensors</label>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Index</th><th>Name</th><th>Address</th><th>Current Temp (C)</th></tr></thead>
+              <tbody id="sensor_rows"><tr><td colspan="4">Loading...</td></tr></tbody>
+            </table>
+          </div>
+        </div>
       </div>
       <div class="card">
         <h3 class="card-title">IR Receiver</h3>
@@ -374,7 +393,9 @@
   <script>
     const J = (u, o) => fetch(u, o).then(r => r.json());
     const byId = id => document.getElementById(id);
+    const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
     let config = null;
+    let status = null;
 
     // Tab switching
     document.querySelectorAll('.tab').forEach(tab => {
@@ -410,6 +431,8 @@
       byId('ts_enabled').checked = !!c.temp_sensors?.enabled;
       byId('ts_gpio').value = c.temp_sensors?.gpio || 4;
       byId('ts_interval').value = c.temp_sensors?.read_interval_sec || 10;
+      byId('ts_precision').value = String(Math.max(0, Math.min(2, Number(c.temp_sensors?.precision ?? 2))));
+      renderSensorRows(c, status);
       byId('irrx_enabled').checked = !!c.ir_receiver?.enabled;
       byId('irrx_gpio').value = c.ir_receiver?.gpio || 14;
       byId('irrx_mode').value = c.ir_receiver?.mode || 'auto';
@@ -442,6 +465,15 @@
       config.temp_sensors.enabled = byId('ts_enabled').checked;
       config.temp_sensors.gpio = parseInt(byId('ts_gpio').value || '4', 10);
       config.temp_sensors.read_interval_sec = parseInt(byId('ts_interval').value || '10', 10);
+      config.temp_sensors.precision = Math.max(0, Math.min(2, parseInt(byId('ts_precision').value || '2', 10)));
+      const names = Array.from(config.temp_sensors.names || []);
+      while (names.length < 8) names.push('');
+      document.querySelectorAll('#sensor_rows [data-sensor-index]').forEach(row => {
+        const idx = Number(row.getAttribute('data-sensor-index'));
+        const input = row.querySelector('input[data-sensor-name]');
+        if (Number.isInteger(idx) && idx >= 0 && idx < names.length && input) names[idx] = input.value.trim();
+      });
+      config.temp_sensors.names = names;
       config.ir_receiver = config.ir_receiver || {};
       config.ir_receiver.enabled = byId('irrx_enabled').checked;
       config.ir_receiver.gpio = parseInt(byId('irrx_gpio').value || '14', 10);
@@ -487,8 +519,25 @@
       byId('status').textContent = text || 'Saved. Device should reboot shortly.';
     }
 
+    function renderSensorRows(c, s) {
+      const rows = byId('sensor_rows');
+      const sensors = s?.temp_sensors || [];
+      const names = c?.temp_sensors?.names || [];
+      const precision = Math.max(0, Math.min(2, Number(c?.temp_sensors?.precision ?? 2)));
+      if (!sensors.length) {
+        rows.innerHTML = '<tr><td colspan="4">No sensors detected</td></tr>';
+        return;
+      }
+      rows.innerHTML = sensors.map(sensor => {
+        const idx = Number(sensor.index || 0);
+        const currName = (names[idx] || sensor.name || '').toString();
+        const temp = sensor.valid && Number.isFinite(Number(sensor.current_temp)) ? Number(sensor.current_temp).toFixed(precision) : 'N/A';
+        return `<tr data-sensor-index="${idx}"><td>${idx}</td><td><input data-sensor-name maxlength="32" value="${esc(currName)}"></td><td>${esc(sensor.address || '-')}</td><td>${temp}</td></tr>`;
+      }).join('');
+    }
+
     async function init() {
-      config = await J('/api/config');
+      [config, status] = await Promise.all([J('/api/config'), J('/api/status')]);
       loadForm(config);
       byId('scan_btn').addEventListener('click', () => scanWifi().catch(e => byId('scan_feedback').textContent = 'Scan failed: ' + e));
       byId('ssid_scan').addEventListener('change', e => { if (e.target.value) byId('ssid').value = e.target.value; });
