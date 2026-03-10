@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
     xsi:noNamespaceSchemaLocation="racepoint_component_profile.xsd" manufacturer="Robatto"
-    model="IR_Server" device_class="HVAC_controller" rpm_xml_version="$Revision: 1.0 $" minimum_component_engine_version="0.0">
+    model="IR_Server" device_class="HVAC_controller" rpm_xml_version="$Revision: 2.4 $" minimum_component_engine_version="0.0">
     <notes>
         Absolute Controls DINPLUG HVAC JSON profile
         Transport: Telnet TCP 4998
@@ -13,6 +13,11 @@
         Version 2.0: add 8 Racepoint IR outputs mapped to emitters 0-7.
         Version 2.1: switched from 8 physical IR outputs to a single IR control interface.
         Version 2.2: removed IR control interface; profile now uses IP control only.
+        Version 2.3: add startup/periodic state sync request (push_all) and periodic keepalive (list).
+        Version 2.4: aligned with firmware updates:
+                     - uses cmd push_all for startup and periodic JSON state synchronization
+                     - uses cmd list as keepalive with response timeout supervision
+                     - improves recovery after transport interruptions by forcing regular state refresh
     </notes>
 
     <control_interfaces preferred="ip">
@@ -74,6 +79,36 @@
                         <delay ms_delay="100"/>
                     </command>
                 </command_interface>
+            </action>
+
+            <action name="RequestStateSyncStartup">
+                <command_interface interface="ip">
+                    <command response_required="no" partial_response="yes">
+                        <command_string type="character">{"cmd":"push_all"}</command_string>
+                        <delay ms_delay="100"/>
+                    </command>
+                </command_interface>
+                <execute_on_schedule period_ms="0"/>
+            </action>
+
+            <action name="RequestStateSyncPeriodic">
+                <command_interface interface="ip">
+                    <command response_required="no" partial_response="yes">
+                        <command_string type="character">{"cmd":"push_all"}</command_string>
+                        <delay ms_delay="100"/>
+                    </command>
+                </command_interface>
+                <execute_on_schedule period_ms="30000"/>
+            </action>
+
+            <action name="KeepAlive">
+                <command_interface interface="ip">
+                    <command response_required="yes" response_time_length_ms="2000">
+                        <command_string type="character">{"cmd":"list"}</command_string>
+                        <delay ms_delay="100"/>
+                    </command>
+                </command_interface>
+                <execute_on_schedule period_ms="10000"/>
             </action>
         </custom_component_actions>
 

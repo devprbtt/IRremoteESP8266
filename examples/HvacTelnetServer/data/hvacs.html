@@ -244,7 +244,7 @@
     /* Button binding rows */
     .bind-row {
       display: grid;
-      grid-template-columns: repeat(8, minmax(0, 1fr)) auto;
+      grid-template-columns: repeat(12, minmax(0, 1fr)) auto;
       gap: 8px;
       margin-bottom: 8px;
       align-items: end;
@@ -479,7 +479,9 @@
   <script>
     const J = (u, o) => fetch(u, o).then(r => r.json());
     const byId = id => document.getElementById(id);
-    const DINACTIONS = ["none","temp_up","temp_down","set_temp","power_on","power_off","toggle_power","mode_heat","mode_cool","mode_fan","mode_auto","mode_off"];
+    const DINACTIONS = ["none","temp_up","temp_down","set_temp","power_on","power_off","toggle_power","mode_heat","mode_cool","mode_fan","mode_auto","mode_off","light_on","light_off","toggle_light"];
+    const MODEOVERRIDES = ["keep","auto","cool","heat","dry","fan"];
+    const LIGHTMODES = ["keep","on","off","toggle"];
     const ACTIONS_WITH_VALUE = new Set(["temp_up","temp_down","set_temp"]);
     let cfg, meta, status;
     let activeTab = 'list';
@@ -578,8 +580,12 @@
           <div class="field"><label>Button</label><input name="btn${i}_id" type="number" min="0" value="${b.id || 0}"></div>
           <div class="field"><label>Press Action</label><select name="btn${i}_press_action">${optHtml(actions, v => v, v => v, b.press_action || 'none')}</select></div>
           <div class="field"><label>Press Value</label><input name="btn${i}_press_value" type="number" step="0.5" value="${b.press_value != null ? b.press_value : 1}"></div>
+          <div class="field"><label>Press Mode</label><select name="btn${i}_press_mode_override">${optHtml(meta.mode_overrides || MODEOVERRIDES, v => v, v => v, b.press_mode_override || 'keep')}</select></div>
+          <div class="field"><label>Press Light</label><select name="btn${i}_press_light_mode">${optHtml(LIGHTMODES, v => v, v => v, b.press_light_mode || 'keep')}</select></div>
           <div class="field"><label>Hold Action</label><select name="btn${i}_hold_action">${optHtml(actions, v => v, v => v, b.hold_action || 'none')}</select></div>
           <div class="field"><label>Hold Value</label><input name="btn${i}_hold_value" type="number" step="0.5" value="${b.hold_value != null ? b.hold_value : 1}"></div>
+          <div class="field"><label>Hold Mode</label><select name="btn${i}_hold_mode_override">${optHtml(meta.mode_overrides || MODEOVERRIDES, v => v, v => v, b.hold_mode_override || 'keep')}</select></div>
+          <div class="field"><label>Hold Light</label><select name="btn${i}_hold_light_mode">${optHtml(LIGHTMODES, v => v, v => v, b.hold_light_mode || 'keep')}</select></div>
           <div class="field"><label>Toggle Mode</label><select name="btn${i}_toggle_power_mode">${optHtml(meta.toggle_modes || ['auto','cool','heat','dry','fan'], v => v, v => v, b.toggle_power_mode || 'auto')}</select></div>
           <div class="field"><label>LED Follow</label><select name="btn${i}_led_follow_mode">${optHtml(['0','1','2'], v => v, v => ({'0':'disabled','1':'on when HVAC on','2':'on when HVAC off'}[v]), String(b.led_follow_mode != null ? b.led_follow_mode : 0))}</select></div>
           <button type="button" class="btn-sm btn-secondary" onclick="clearBindRow(this)">Clear</button>
@@ -773,6 +779,9 @@
     });
 
     async function init() {
+      const validTabs = new Set(['list', 'emitters', 'add', 'edit', 'test']);
+      const queryTab = new URLSearchParams(window.location.search).get('tab');
+      if (queryTab && validTabs.has(queryTab)) activeTab = queryTab;
       await refreshPage(activeTab);
     }
     init().catch(e => {
