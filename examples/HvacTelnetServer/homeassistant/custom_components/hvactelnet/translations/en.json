@@ -1,0 +1,21 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to HvacTelnetServer",
+        "description": "Enter the ESP32 host and telnet port.",
+        "data": {
+          "host": "Host",
+          "port": "Port"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the ESP32",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "already_configured": "This ESP32 is already configured"
+    }
+  }
+}

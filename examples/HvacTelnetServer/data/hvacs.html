@@ -131,6 +131,7 @@
       gap: 12px;
     }
     .form-grid.cols-3 { grid-template-columns: repeat(3, 1fr); }
+    .form-grid.cols-4 { grid-template-columns: repeat(4, 1fr); }
     .form-grid.cols-1 { grid-template-columns: 1fr; }
     .field {
       display: flex;
@@ -241,19 +242,6 @@
       font-size: 0.8rem;
     }
 
-    /* Button binding rows */
-    .bind-row {
-      display: grid;
-      grid-template-columns: repeat(12, minmax(0, 1fr)) auto;
-      gap: 8px;
-      margin-bottom: 8px;
-      align-items: end;
-    }
-    .bind-row input, .bind-row select {
-      padding: 9px 10px;
-      font-size: 0.8rem;
-    }
-
     /* Check */
     .check {
       display: flex;
@@ -292,9 +280,8 @@
     }
 
     @media (max-width: 640px) {
-      .form-grid, .form-grid.cols-3 { grid-template-columns: 1fr; }
+      .form-grid, .form-grid.cols-3, .form-grid.cols-4 { grid-template-columns: 1fr; }
       .cmd-row { grid-template-columns: 1fr; }
-      .bind-row { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -313,7 +300,6 @@
       <button class="tab" data-tab="test">Test</button>
     </div>
 
-    <!-- LIST TAB -->
     <div id="tab-list" class="tab-content active">
       <div class="card">
         <h3 class="card-title">Registered HVACs</h3>
@@ -327,7 +313,6 @@
       <div class="status" id="status_list">Ready</div>
     </div>
 
-    <!-- EMITTERS TAB -->
     <div id="tab-emitters" class="tab-content">
       <div class="card">
         <h3 class="card-title">IR Emitters</h3>
@@ -355,7 +340,6 @@
       <div class="status" id="status_emitters">Ready</div>
     </div>
 
-    <!-- ADD TAB -->
     <div id="tab-add" class="tab-content">
       <div class="card">
         <h3 class="card-title">Add HVAC</h3>
@@ -388,7 +372,6 @@
       </div>
     </div>
 
-    <!-- EDIT TAB -->
     <div id="tab-edit" class="tab-content">
       <div class="card" id="edit_card">
         <h3 class="card-title">Edit HVAC</h3>
@@ -421,7 +404,6 @@
       <div class="status" id="status_edit">Select an HVAC to edit</div>
     </div>
 
-    <!-- TEST TAB -->
     <div id="tab-test" class="tab-content">
       <div class="card">
         <h3 class="card-title">Test Registered HVAC</h3>
@@ -575,20 +557,38 @@
       const actions = isCustom ? ['none', ...((items._customActions) || [])] : DINACTIONS;
       for (let i = 0; i < (meta.max_dinplug_buttons || 8); i++) {
         const b = items[i] || {};
-        html += `<div class="bind-row">
-          <div class="field"><label>Keypad</label><input name="btn${i}_keypad_id" type="number" min="0" value="${b.keypad_id || 0}"></div>
-          <div class="field"><label>Button</label><input name="btn${i}_id" type="number" min="0" value="${b.id || 0}"></div>
-          <div class="field"><label>Press Action</label><select name="btn${i}_press_action">${optHtml(actions, v => v, v => v, b.press_action || 'none')}</select></div>
-          <div class="field"><label>Press Value</label><input name="btn${i}_press_value" type="number" step="0.5" value="${b.press_value != null ? b.press_value : 1}"></div>
-          <div class="field"><label>Press Mode</label><select name="btn${i}_press_mode_override">${optHtml(meta.mode_overrides || MODEOVERRIDES, v => v, v => v, b.press_mode_override || 'keep')}</select></div>
-          <div class="field"><label>Press Light</label><select name="btn${i}_press_light_mode">${optHtml(LIGHTMODES, v => v, v => v, b.press_light_mode || 'keep')}</select></div>
-          <div class="field"><label>Hold Action</label><select name="btn${i}_hold_action">${optHtml(actions, v => v, v => v, b.hold_action || 'none')}</select></div>
-          <div class="field"><label>Hold Value</label><input name="btn${i}_hold_value" type="number" step="0.5" value="${b.hold_value != null ? b.hold_value : 1}"></div>
-          <div class="field"><label>Hold Mode</label><select name="btn${i}_hold_mode_override">${optHtml(meta.mode_overrides || MODEOVERRIDES, v => v, v => v, b.hold_mode_override || 'keep')}</select></div>
-          <div class="field"><label>Hold Light</label><select name="btn${i}_hold_light_mode">${optHtml(LIGHTMODES, v => v, v => v, b.hold_light_mode || 'keep')}</select></div>
-          <div class="field"><label>Toggle Mode</label><select name="btn${i}_toggle_power_mode">${optHtml(meta.toggle_modes || ['auto','cool','heat','dry','fan'], v => v, v => v, b.toggle_power_mode || 'auto')}</select></div>
-          <div class="field"><label>LED Follow</label><select name="btn${i}_led_follow_mode">${optHtml(['0','1','2'], v => v, v => ({'0':'disabled','1':'on when HVAC on','2':'on when HVAC off'}[v]), String(b.led_follow_mode != null ? b.led_follow_mode : 0))}</select></div>
-          <button type="button" class="btn-sm btn-secondary" onclick="clearBindRow(this)">Clear</button>
+        html += `
+        <div class="bind-group subcard" style="margin-top: 0; margin-bottom: 12px; background: var(--surface-elevated);">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 8px;">
+            <span style="font-size: 0.85rem; font-weight: 700; color: var(--text);">Binding #${i + 1}</span>
+            <button type="button" class="btn-sm btn-secondary" onclick="clearBindRow(this)">Clear</button>
+          </div>
+
+          <div class="form-grid cols-3" style="margin-bottom: 12px;">
+            <div class="field"><label>Keypad ID</label><input name="btn${i}_keypad_id" type="number" min="0" value="${b.keypad_id || 0}"></div>
+            <div class="field"><label>Button ID</label><input name="btn${i}_id" type="number" min="0" value="${b.id || 0}"></div>
+            <div class="field"><label>LED Follow</label><select name="btn${i}_led_follow_mode">${optHtml(['0','1','2'], v => v, v => ({'0':'disabled','1':'on when HVAC on','2':'on when HVAC off'}[v]), String(b.led_follow_mode != null ? b.led_follow_mode : 0))}</select></div>
+          </div>
+
+          <div class="field"><label style="color: var(--primary);">Press Event</label></div>
+          <div class="form-grid cols-4" style="margin-bottom: 12px;">
+            <div class="field"><label>Action</label><select name="btn${i}_press_action">${optHtml(actions, v => v, v => v, b.press_action || 'none')}</select></div>
+            <div class="field"><label>Value</label><input name="btn${i}_press_value" type="number" step="0.5" value="${b.press_value != null ? b.press_value : 1}"></div>
+            <div class="field"><label>Mode Override</label><select name="btn${i}_press_mode_override">${optHtml(meta.mode_overrides || MODEOVERRIDES, v => v, v => v, b.press_mode_override || 'keep')}</select></div>
+            <div class="field"><label>Light</label><select name="btn${i}_press_light_mode">${optHtml(LIGHTMODES, v => v, v => v, b.press_light_mode || 'keep')}</select></div>
+          </div>
+
+          <div class="field"><label style="color: var(--primary);">Hold Event</label></div>
+          <div class="form-grid cols-4" style="margin-bottom: 12px;">
+            <div class="field"><label>Action</label><select name="btn${i}_hold_action">${optHtml(actions, v => v, v => v, b.hold_action || 'none')}</select></div>
+            <div class="field"><label>Value</label><input name="btn${i}_hold_value" type="number" step="0.5" value="${b.hold_value != null ? b.hold_value : 1}"></div>
+            <div class="field"><label>Mode Override</label><select name="btn${i}_hold_mode_override">${optHtml(meta.mode_overrides || MODEOVERRIDES, v => v, v => v, b.hold_mode_override || 'keep')}</select></div>
+            <div class="field"><label>Light</label><select name="btn${i}_hold_light_mode">${optHtml(LIGHTMODES, v => v, v => v, b.hold_light_mode || 'keep')}</select></div>
+          </div>
+
+          <div class="form-grid cols-3">
+            <div class="field"><label>Toggle Power Mode</label><select name="btn${i}_toggle_power_mode">${optHtml(meta.toggle_modes || ['auto','cool','heat','dry','fan'], v => v, v => v, b.toggle_power_mode || 'auto')}</select></div>
+          </div>
         </div>`;
       }
       return html;
@@ -609,13 +609,14 @@
       if (toggleMode) toggleMode.disabled = !toggleEnabled;
     }
     function bindBindingControls() {
-      document.querySelectorAll('#button_rows .bind-row').forEach(row => {
+      document.querySelectorAll('#button_rows .bind-group').forEach(row => {
         row.querySelectorAll('select').forEach(sel => sel.addEventListener('change', () => syncBindRow(row)));
         syncBindRow(row);
       });
     }
     window.clearBindRow = function(btn) {
-      const row = btn.parentElement;
+      const row = btn.closest('.bind-group');
+      if (!row) return;
       row.querySelectorAll('input').forEach(el => el.value = el.type === 'number' ? '0' : '');
       row.querySelectorAll('select').forEach(el => el.value = el.options[0].value);
       syncBindRow(row);

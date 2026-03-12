@@ -1,0 +1,10 @@
+{
+  "domain": "hvactelnet",
+  "name": "HVAC Telnet",
+  "codeowners": [],
+  "config_flow": true,
+  "iot_class": "local_push",
+  "loggers": ["custom_components.hvactelnet"],
+  "requirements": [],
+  "version": "0.1.0"
+}
