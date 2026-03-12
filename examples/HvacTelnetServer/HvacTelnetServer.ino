@@ -11,6 +11,7 @@
 #include <ArduinoJson.h>
 #include <ArduinoOTA.h>
 #include <Update.h>
+#include <Preferences.h>
 #include <WireGuard-ESP32.h>
 #include <time.h>
 #include <esp_system.h>
@@ -52,6 +53,8 @@ static const char *kConfigPath = "/config.json";
 static const char *kHvacStatePath = "/hvac_state.json";
 static const char *kApSsid = "IR-HVAC-Setup";
 static const char *kDefaultHostname = "ir-server";
+static const char *kConfigPrefsNamespace = "hvaccfg";
+static const char *kConfigPrefsKey = "json";
 static const uint8_t kDinplugModeOverrideKeep = 0;
 static const uint8_t kDinplugModeOverrideAuto = 1;
 static const uint8_t kDinplugModeOverrideCool = 2;
@@ -199,6 +202,7 @@ unsigned long dinplugLastAttemptMs = 0;
 unsigned long dinplugLastKeepAliveMs = 0;
 unsigned long dinplugLastRxMs = 0;
 DNSServer dnsServer;
+Preferences preferences;
 bool telnetMonitorEnabled = true;
 String serialConsoleBuffer;
 String telnetMonitorLog[kMonitorLogCapacity];
@@ -248,6 +252,11 @@ void ensureWireGuardConnected();
 bool generateWireGuardPrivateKeyBase64(String &outPrivateKeyB64);
 bool deriveWireGuardPublicKeyBase64(const String &privateKeyB64, String &outPublicKeyB64);
 bool ensureWireGuardKeypair(bool printStatus);
+bool saveConfigJson(const String &json);
+bool loadConfigFromJson(const String &json, bool printErrors = true);
+bool readStoredConfigJson(String &json);
+bool importLegacyConfigFromSpiffs();
+void clearPersistedData();
 void handleDinplug();
 void ensureDinplugConnected(bool forceNow = false);
 void processDinplugLine(const String &line);
@@ -263,6 +272,7 @@ void handleApiMeta();
 void handleApiConfigSave();
 void handleFilesystemUpdate();
 void handleFilesystemUpload();
+void handleFactoryReset();
 bool dinActionUsesValue(const String &action);
 uint8_t normalizeDinplugModeOverride(const String &modeIn);
 const char *dinplugModeOverrideToString(uint8_t mode);
@@ -926,16 +936,20 @@ String configToJsonString() {
   return out;
 }
 
-void saveConfig() {
-  File f = SPIFFS.open(kConfigPath, FILE_WRITE);
-  if (!f) {
-    Serial.println("config: failed to open for write");
-    return;
+bool saveConfigJson(const String &json) {
+  preferences.begin(kConfigPrefsNamespace, false);
+  size_t written = preferences.putBytes(kConfigPrefsKey, json.c_str(), json.length());
+  preferences.end();
+  if (written != json.length()) {
+    Serial.println("config: failed to persist");
+    return false;
   }
-  String json = configToJsonString();
-  f.print(json);
-  f.close();
   Serial.println("config: saved");
+  return true;
+}
+
+void saveConfig() {
+  saveConfigJson(configToJsonString());
 }
 
 void clearConfig() {
@@ -1000,24 +1014,17 @@ void clearConfig() {
   initHvacRuntimeStates();
 }
 
-void loadConfig() {
+bool loadConfigFromJson(const String &json, bool printErrors) {
   clearConfig();
-  if (!SPIFFS.exists(kConfigPath)) {
-    Serial.println("config: not found");
-    return;
-  }
-  File f = SPIFFS.open(kConfigPath, FILE_READ);
-  if (!f) {
-    Serial.println("config: failed to open");
-    return;
-  }
+
   JsonDocument doc;
-  DeserializationError err = deserializeJson(doc, f);
-  f.close();
+  DeserializationError err = deserializeJson(doc, json);
   if (err) {
-    Serial.print("config: parse error ");
-    Serial.println(err.c_str());
-    return;
+    if (printErrors) {
+      Serial.print("config: parse error ");
+      Serial.println(err.c_str());
+    }
+    return false;
   }
 
   JsonObject wifi = doc["wifi"];
@@ -1195,6 +1202,77 @@ void loadConfig() {
       }
     }
   }
+
+  return true;
+}
+
+bool readStoredConfigJson(String &json) {
+  json = "";
+  preferences.begin(kConfigPrefsNamespace, true);
+  size_t size = preferences.getBytesLength(kConfigPrefsKey);
+  if (size == 0) {
+    preferences.end();
+    return false;
+  }
+  char *buffer = new char[size + 1];
+  if (!buffer) {
+    preferences.end();
+    Serial.println("config: alloc failed");
+    return false;
+  }
+  size_t read = preferences.getBytes(kConfigPrefsKey, buffer, size);
+  preferences.end();
+  buffer[read] = '\0';
+  json = String(buffer);
+  delete[] buffer;
+  return read > 0;
+}
+
+bool importLegacyConfigFromSpiffs() {
+  if (!SPIFFS.exists(kConfigPath)) return false;
+  File f = SPIFFS.open(kConfigPath, FILE_READ);
+  if (!f) {
+    Serial.println("config: legacy open failed");
+    return false;
+  }
+  String json = f.readString();
+  f.close();
+  if (!json.length()) {
+    Serial.println("config: legacy file empty");
+    return false;
+  }
+  if (!loadConfigFromJson(json)) return false;
+  saveConfig();
+  Serial.println("config: migrated from SPIFFS");
+  return true;
+}
+
+void clearPersistedData() {
+  preferences.begin(kConfigPrefsNamespace, false);
+  preferences.clear();
+  preferences.end();
+
+  if (SPIFFS.exists(kConfigPath)) SPIFFS.remove(kConfigPath);
+  if (SPIFFS.exists(kHvacStatePath)) SPIFFS.remove(kHvacStatePath);
+
+  clearConfig();
+  initHvacRuntimeStates();
+  hvacStatesDirty = false;
+  hvacStatesDirtySinceMs = 0;
+  wgConnected = false;
+  wgInterfacePublicKey = "";
+  clearMonitorLog();
+}
+
+void loadConfig() {
+  String json;
+  if (readStoredConfigJson(json)) {
+    if (loadConfigFromJson(json)) return;
+    Serial.println("config: stored config invalid, trying legacy SPIFFS backup");
+  }
+  if (importLegacyConfigFromSpiffs()) return;
+  clearConfig();
+  Serial.println("config: not found");
 }
 
 void rebuildEmitters() {
@@ -2831,16 +2909,12 @@ void handleHvacTestPage() {
 
 void handleConfigDownload() {
   if (!checkAuth()) { requestAuth(); return; }
-  if (!SPIFFS.exists(kConfigPath)) {
-    web.send(404, "text/plain", "No config file");
-    return;
-  }
-  File f = SPIFFS.open(kConfigPath, FILE_READ);
-  web.streamFile(f, "application/json");
-  f.close();
+  String json = configToJsonString();
+  web.sendHeader("Content-Disposition", "attachment; filename=\"config.json\"");
+  web.send(200, "application/json", json);
 }
 
-File uploadFile;
+String configUploadBuffer;
 void handleConfigUploadPage() {
   if (!checkAuth()) { requestAuth(); return; }
   String html = pageHeader("Upload Config");
@@ -2856,19 +2930,36 @@ void handleConfigUpload() {
   if (!checkAuth()) { requestAuth(); return; }
   HTTPUpload &up = web.upload();
   if (up.status == UPLOAD_FILE_START) {
-    uploadFile = SPIFFS.open(kConfigPath, FILE_WRITE);
+    configUploadBuffer = "";
+    configUploadBuffer.reserve(up.totalSize > 0 ? up.totalSize : 1024);
     Serial.println("web: upload start");
   } else if (up.status == UPLOAD_FILE_WRITE) {
-    if (uploadFile) uploadFile.write(up.buf, up.currentSize);
+    configUploadBuffer.concat(reinterpret_cast<const char *>(up.buf), up.currentSize);
   } else if (up.status == UPLOAD_FILE_END) {
-    if (uploadFile) uploadFile.close();
     Serial.println("web: upload complete");
+  } else if (up.status == UPLOAD_FILE_ABORTED) {
+    configUploadBuffer = "";
+    Serial.println("web: upload aborted");
   }
 }
 
 void handleConfigUploadDone() {
   if (!checkAuth()) { requestAuth(); return; }
-  loadConfig();
+  if (!configUploadBuffer.length()) {
+    web.send(400, "text/html", "<html><body><p>Upload failed: empty config.</p></body></html>");
+    return;
+  }
+  if (!loadConfigFromJson(configUploadBuffer)) {
+    configUploadBuffer = "";
+    web.send(400, "text/html", "<html><body><p>Upload failed: invalid config JSON.</p></body></html>");
+    return;
+  }
+  if (!saveConfigJson(configUploadBuffer)) {
+    configUploadBuffer = "";
+    web.send(500, "text/html", "<html><body><p>Upload failed: could not persist config.</p></body></html>");
+    return;
+  }
+  configUploadBuffer = "";
   rebuildEmitters();
   Serial.println("web: upload applied, rebooting");
   web.send(200, "text/html", "<html><body><p>Uploaded. Rebooting...</p></body></html>");
@@ -2992,6 +3083,22 @@ void handleFilesystemUpload() {
   }
 }
 
+void handleFactoryReset() {
+  if (!checkAuth()) { requestAuth(); return; }
+  Serial.println("system: factory reset requested");
+  clearPersistedData();
+
+  String html = "<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Factory Reset</title>";
+  html += "<style>body{font-family:Arial,sans-serif;padding:24px;max-width:720px;margin:auto;}a{word-break:break-all;}code{background:#f1f5f9;padding:2px 6px;border-radius:6px;}</style></head><body>";
+  html += "<h2>Factory reset complete. Rebooting...</h2>";
+  html += "<p>All saved settings and persisted HVAC state were erased.</p>";
+  html += "<p>After reboot the device should start in setup AP mode at <a href='http://192.168.4.1/'>http://192.168.4.1/</a>.</p>";
+  html += "<script>setTimeout(()=>{location.href='http://192.168.4.1/';},2500);</script></body></html>";
+  web.send(200, "text/html", html);
+  delay(500);
+  ESP.restart();
+}
+
 void handleApiConfig() {
   if (!checkAuth()) { requestAuth(); return; }
   String json = configToJsonString();
@@ -3101,13 +3208,10 @@ void handleApiConfigSave() {
     return;
   }
 
-  File f = SPIFFS.open(kConfigPath, FILE_WRITE);
-  if (!f) {
+  if (!saveConfigJson(body)) {
     web.send(500, "application/json", "{\"ok\":false,\"error\":\"config_write_failed\"}");
     return;
   }
-  f.print(body);
-  f.close();
 
   web.send(200, "application/json", "{\"ok\":true,\"rebooting\":true}");
   delay(300);
@@ -3687,6 +3791,7 @@ void setupWeb() {
     if (!checkAuth()) { requestAuth(); return; }
     if (!streamSpiffsFile("/system.html", "text/html; charset=utf-8")) handleFirmwarePage();
   });
+  web.on("/system/factory-reset", HTTP_POST, handleFactoryReset);
 
   // Captive portal & connectivity check endpoints.
   web.on("/generate_204", HTTP_ANY, handleCaptive204);

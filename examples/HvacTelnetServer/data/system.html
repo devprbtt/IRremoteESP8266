@@ -17,6 +17,7 @@
       --primary: #3b82f6;
       --success: #22c55e;
       --warning: #f59e0b;
+      --danger: #ef4444;
       --terminal-bg: #0d1117;
       --terminal-text: #22c55e;
       --radius: 14px;
@@ -151,6 +152,7 @@
     .btn-primary { background: var(--success); }
     .btn-secondary { background: var(--primary); }
     .btn-warning { background: var(--warning); color: #111; }
+    .btn-danger { background: var(--danger); }
     .btn-outline {
       background: transparent;
       color: var(--text);
@@ -251,6 +253,15 @@
       color: var(--text-muted);
       font-weight: 400;
     }
+    .danger-card {
+      border-color: rgba(239, 68, 68, 0.45);
+      background: linear-gradient(180deg, rgba(239,68,68,0.08), rgba(239,68,68,0.03));
+    }
+    .danger-text {
+      margin: 0 0 12px;
+      color: #fca5a5;
+      font-size: 0.8rem;
+    }
     @media (max-width: 480px) {
       .link-grid { grid-template-columns: 1fr; }
       .row { flex-direction: column; align-items: stretch; }
@@ -321,6 +332,12 @@
         <input id="cfg_file" type="file" accept=".json,application/json">
         <button class="btn-secondary" type="button" id="cfg_btn" style="margin-top:10px;">Upload Config</button>
         <div class="status" id="cfg_status">Select a config.json file</div>
+      </div>
+      <div class="card danger-card">
+        <h3 class="card-title">Factory Reset</h3>
+        <p class="danger-text">Erases all saved settings, credentials, WireGuard data, DINplug settings, emitter and HVAC configuration, and persisted HVAC runtime state. The device will reboot into setup AP mode.</p>
+        <button class="btn-danger" type="button" id="reset_btn">Factory Reset</button>
+        <div class="status" id="reset_status">This action cannot be undone.</div>
       </div>
     </div>
   </div>
@@ -479,6 +496,31 @@
         byId('cfg_status').textContent = result || 'Config restored. Device should reboot.';
       } catch (err) {
         byId('cfg_status').textContent = 'Error: ' + err.message;
+      }
+    });
+
+    byId('reset_btn').addEventListener('click', async () => {
+      const confirmed = window.prompt("Type RESET to erase all saved settings and reboot the device.", "");
+      if (confirmed !== 'RESET') {
+        byId('reset_status').textContent = 'Factory reset cancelled.';
+        return;
+      }
+      try {
+        byId('reset_btn').disabled = true;
+        byId('reset_status').textContent = 'Erasing saved data and rebooting...';
+        const res = await fetch('/system/factory-reset', { method: 'POST' });
+        const text = await res.text();
+        if (res.ok) {
+          document.open();
+          document.write(text);
+          document.close();
+          return;
+        }
+        byId('reset_btn').disabled = false;
+        byId('reset_status').textContent = text || `Factory reset failed (${res.status}).`;
+      } catch (err) {
+        byId('reset_btn').disabled = false;
+        byId('reset_status').textContent = 'Factory reset failed: ' + err.message;
       }
     });
   </script>

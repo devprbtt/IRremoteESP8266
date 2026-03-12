@@ -18,6 +18,7 @@
                      - uses cmd push_all for startup and periodic JSON state synchronization
                      - uses cmd list as keepalive with response timeout supervision
                      - improves recovery after transport interruptions by forcing regular state refresh
+        Version 2.5: add named custom command trigger for CUSTOM HVAC entries configured in the UI.
     </notes>
 
     <control_interfaces preferred="ip">
@@ -74,6 +75,23 @@
                             <parameter parameter_data_type="character" action_argument="Emitter"/>
                             <parameter parameter_data_type="character">,"encoding":"racepoint","code":"</parameter>
                             <parameter parameter_data_type="character" action_argument="IRCode"/>
+                            <parameter parameter_data_type="character">"}</parameter>
+                        </parameter_list>
+                        <delay ms_delay="100"/>
+                    </command>
+                </command_interface>
+            </action>
+
+            <action name="SendNamedCustomCommand">
+                <action_argument name="ThermostatAddress" note="DEVICE_ID mapped to JSON id for a CUSTOM HVAC entry"/>
+                <action_argument name="CommandName" note="Custom command name configured in the UI, e.g. power_off"/>
+                <command_interface interface="ip">
+                    <command response_required="no" partial_response="no">
+                        <command_string type="character">{"cmd":"send","id":"</command_string>
+                        <parameter_list>
+                            <parameter parameter_data_type="character" action_argument="ThermostatAddress"/>
+                            <parameter parameter_data_type="character">","command_name":"</parameter>
+                            <parameter parameter_data_type="character" action_argument="CommandName"/>
                             <parameter parameter_data_type="character">"}</parameter>
                         </parameter_list>
                         <delay ms_delay="100"/>
