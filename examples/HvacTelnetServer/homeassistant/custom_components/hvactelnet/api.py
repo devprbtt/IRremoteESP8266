@@ -19,6 +19,7 @@ JsonValue = dict[str, Any] | list[Any]
 StateCallback = Callable[[dict[str, Any]], Awaitable[None] | None]
 AvailabilityCallback = Callable[[bool], Awaitable[None] | None]
 ConnectedCallback = Callable[[], Awaitable[None] | None]
+KEEPALIVE_INTERVAL = 10
 
 
 class HvacTelnetError(Exception):
@@ -52,6 +53,7 @@ class HvacTelnetClient:
         self._stop_event = asyncio.Event()
         self._pending: _PendingRequest | None = None
         self._runner: asyncio.Task[None] | None = None
+        self._keepalive_task: asyncio.Task[None] | None = None
         self._state_callback: StateCallback | None = None
         self._availability_callback: AvailabilityCallback | None = None
         self._connected_callback: ConnectedCallback | None = None
@@ -91,6 +93,11 @@ class HvacTelnetClient:
             self._writer.close()
             with contextlib.suppress(Exception):
                 await self._writer.wait_closed()
+        if self._keepalive_task is not None:
+            self._keepalive_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._keepalive_task
+            self._keepalive_task = None
         if self._runner is not None:
             self._runner.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -152,6 +159,7 @@ class HvacTelnetClient:
                     self._port,
                 )
                 self._connected.set()
+                self._start_keepalive()
                 await self._notify_availability(True)
                 await self._notify_connected()
                 backoff = 1
@@ -170,6 +178,11 @@ class HvacTelnetClient:
                 self._connected.clear()
                 await self._notify_availability(False)
                 self._fail_pending(HvacTelnetConnectionError("Connection lost"))
+                if self._keepalive_task is not None:
+                    self._keepalive_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await self._keepalive_task
+                    self._keepalive_task = None
                 writer = self._writer
                 self._reader = None
                 self._writer = None
@@ -219,6 +232,34 @@ class HvacTelnetClient:
 
             if isinstance(message, dict) and message.get("ok") is False:
                 _LOGGER.debug("ESP32 returned error without pending request: %s", message)
+
+    def _start_keepalive(self) -> None:
+        """Ensure the background keepalive loop is running."""
+        if self._keepalive_task is None or self._keepalive_task.done():
+            self._keepalive_task = asyncio.create_task(self._keepalive_loop())
+
+    async def _keepalive_loop(self) -> None:
+        """Send periodic traffic so stale sockets are detected after ESP reboots."""
+        while not self._stop_event.is_set():
+            await asyncio.sleep(KEEPALIVE_INTERVAL)
+            if not self._connected.is_set():
+                return
+            try:
+                await self.async_ping()
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:
+                _LOGGER.debug(
+                    "Keepalive failed for %s:%s: %s",
+                    self._host,
+                    self._port,
+                    err,
+                )
+                self._connected.clear()
+                writer = self._writer
+                if writer is not None:
+                    writer.close()
+                return
 
     async def _request(
         self,
@@ -270,6 +311,16 @@ class HvacTelnetClient:
                 )
 
             return response
+
+    async def async_ping(self) -> dict[str, Any]:
+        """Probe the ESP32 and force reconnect if the socket is stale."""
+        response = await self._request(
+            {"cmd": "list"},
+            matcher=lambda msg: isinstance(msg, dict) and bool(msg.get("ok")),
+        )
+        if not isinstance(response, dict):
+            raise HvacTelnetCommandError("Unexpected ping response")
+        return response
 
     def _fail_pending(self, err: Exception) -> None:
         """Fail any in-flight request."""

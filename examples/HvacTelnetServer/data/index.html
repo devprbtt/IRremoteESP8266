@@ -252,7 +252,6 @@
       `;
 
       document.getElementById("services").innerHTML = `
-        <div class="info-row"><span class="info-label">WireGuard</span><span class="info-value">${s.wireguard_enabled ? `<span class="status-dot"></span>${s.wireguard_connected ? "Connected" : "Enabled"}` : "Disabled"}</span></div>
         <div class="info-row"><span class="info-label">IR Receiver</span><span class="info-value">${s.ir_receiver_enabled ? "GPIO " + s.ir_receiver_gpio : "Disabled"}</span></div>
         <div class="info-row"><span class="info-label">Temp Sensors</span><span class="info-value">${s.temp_sensors_enabled ? s.temp_sensor_count + " found" : "Disabled"}</span></div>
         ${s.temp_sensors_enabled ? (sensorRows || '<div class="info-row"><span class="info-label">Sensor Readings</span><span class="info-value">No sensors detected</span></div>') : ''}

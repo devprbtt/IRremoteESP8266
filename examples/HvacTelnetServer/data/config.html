@@ -237,7 +237,6 @@
     <div class="tabs">
       <button class="tab active" data-tab="wifi">Wi-Fi</button>
       <button class="tab" data-tab="services">Services</button>
-      <button class="tab" data-tab="wireguard">WireGuard</button>
       <button class="tab" data-tab="sensors">Sensors</button>
       <button class="tab" data-tab="dinplug">DINplug</button>
     </div>
@@ -285,24 +284,6 @@
         <h3 class="card-title">Ethernet</h3>
         <div class="check"><input id="eth_enabled" type="checkbox"><span>Enable Ethernet (W5500)</span></div>
         <p class="hint">Enable this if you have a W5500 Ethernet module connected.</p>
-      </div>
-    </div>
-
-    <!-- WIREGUARD TAB -->
-    <div id="tab-wireguard" class="tab-content">
-      <div class="card">
-        <h3 class="card-title">WireGuard VPN</h3>
-        <div class="check"><input id="wg_enabled" type="checkbox"><span>Enable WireGuard client</span></div>
-        <div class="form-grid">
-          <div class="field"><label>Local Tunnel IP</label><input id="wg_local_ip"></div>
-          <div class="field"><label>Endpoint Port</label><input id="wg_endpoint_port" type="number" min="1" max="65535"></div>
-        </div>
-        <div class="form-grid cols-1" style="margin-top:12px;">
-          <div class="field"><label>Private Key</label><input id="wg_private_key" type="password"></div>
-          <div class="field"><label>Peer Public Key</label><input id="wg_peer_public_key"></div>
-          <div class="field"><label>Endpoint Host</label><input id="wg_endpoint_host"></div>
-        </div>
-        <p class="hint" id="wg_info"></p>
       </div>
     </div>
 
@@ -419,15 +400,6 @@
       byId('telnet_port').value = c.telnet_port || 4998;
       byId('web_password').value = c.web?.password || '';
       byId('eth_enabled').checked = !!c.ethernet?.enabled;
-      byId('wg_enabled').checked = !!c.wireguard?.enabled;
-      byId('wg_local_ip').value = c.wireguard?.local_ip || '';
-      byId('wg_private_key').value = c.wireguard?.private_key || '';
-      byId('wg_peer_public_key').value = c.wireguard?.peer_public_key || '';
-      byId('wg_endpoint_host').value = c.wireguard?.endpoint_host || '';
-      byId('wg_endpoint_port').value = c.wireguard?.endpoint_port || 51820;
-      byId('wg_info').textContent = c.wireguard?.interface_public_key
-        ? `Interface public key: ${c.wireguard.interface_public_key}`
-        : 'Interface public key will be generated on-device if missing.';
       byId('ts_enabled').checked = !!c.temp_sensors?.enabled;
       byId('ts_gpio').value = c.temp_sensors?.gpio || 4;
       byId('ts_interval').value = c.temp_sensors?.read_interval_sec || 10;
@@ -454,13 +426,7 @@
       config.web.password = byId('web_password').value;
       config.ethernet = config.ethernet || {};
       config.ethernet.enabled = byId('eth_enabled').checked;
-      config.wireguard = config.wireguard || {};
-      config.wireguard.enabled = byId('wg_enabled').checked;
-      config.wireguard.local_ip = byId('wg_local_ip').value;
-      config.wireguard.private_key = byId('wg_private_key').value;
-      config.wireguard.peer_public_key = byId('wg_peer_public_key').value;
-      config.wireguard.endpoint_host = byId('wg_endpoint_host').value;
-      config.wireguard.endpoint_port = parseInt(byId('wg_endpoint_port').value || '51820', 10);
+      delete config.wireguard;
       config.temp_sensors = config.temp_sensors || {};
       config.temp_sensors.enabled = byId('ts_enabled').checked;
       config.temp_sensors.gpio = parseInt(byId('ts_gpio').value || '4', 10);

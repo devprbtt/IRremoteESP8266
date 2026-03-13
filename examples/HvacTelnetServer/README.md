@@ -13,15 +13,14 @@ ESP32 HVAC IR bridge with:
 - Open `http://192.168.4.1/` and configure networking and emitters.
 
 ## Web UI
-- `/config`: WiFi, hostname, telnet port, optional web password, WireGuard, DS18B20, IR receiver, Ethernet (WT32 LAN8720).
+- `/config`: WiFi, hostname, telnet port, optional web password, DS18B20, IR receiver, Ethernet (WT32 LAN8720).
 - `/emitters`: add/remove IR LED GPIO emitters.
 - `/hvacs`: add/edit HVAC entries, including `CUSTOM` command sets and DINplug button mappings.
 - `/hvacs/test`: send test commands for standard and custom HVAC entries.
 - `/raw/test` (from Test page): send ad-hoc raw code (`pronto`, `gc`, `racepoint`, `rawhex`).
 - `/dinplug`: DINplug gateway config + test.
-- `/monitor`: live log viewer with clipboard actions (`Copy Last IR Code`, `Copy All IR Codes`).
-- `/firmware`: web OTA upload with real progress bar.
-- `/config/download` and `/config/upload`: backup/restore config JSON.
+- `/system`: Monitor, firmware updates, and config backup/restore in one page.
+- `/config/download`: download current config JSON.
 
 ## Custom protocol workflow
 In **Add HVAC** (`/hvacs`):
@@ -44,7 +43,7 @@ Configurable in `/config`:
 
 Runtime behavior:
 - Captures are printed to Serial.
-- Captures are added to `/monitor` when monitor logging is enabled.
+- Captures are added to the Monitor tab in `/system` when monitor logging is enabled.
 
 ## DS18B20 temperature sensors
 Configure DS18B20 in `/config`:
@@ -157,7 +156,7 @@ LED follow notes:
 ## OTA
 - ArduinoOTA is enabled at boot (`<hostname>.local`).
 - If web password is set, the same password is used for ArduinoOTA.
-- Web OTA (`/firmware`) shows upload progress and then auto-attempts reconnect to the main page after reboot.
+- Web OTA in `/system` shows upload progress and then auto-attempts reconnect to the main page after reboot.
 
 ## Networking behavior
 - If Ethernet is enabled, firmware tries Ethernet first; if link/IP fails, it falls back to WiFi/AP flow.

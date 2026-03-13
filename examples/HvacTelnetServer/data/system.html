@@ -206,6 +206,27 @@
       align-items: center;
       margin-bottom: 12px;
     }
+    .filters {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .filter-chip {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      background: var(--surface-elevated);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      font-size: 0.8rem;
+      font-weight: 600;
+    }
+    .filter-chip input {
+      width: auto;
+      margin: 0;
+    }
     .status-pill {
       display: inline-flex;
       align-items: center;
@@ -266,6 +287,7 @@
       .link-grid { grid-template-columns: 1fr; }
       .row { flex-direction: column; align-items: stretch; }
       .row .btn-sm { width: 100%; }
+      .filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
   </style>
 </head>
@@ -290,6 +312,12 @@
           <div class="status-pill"><span id="dot" class="status-dot"></span><span id="mon_state">Loading...</span></div>
           <button class="btn-secondary btn-sm" type="button" id="toggle_btn">Toggle</button>
           <button class="btn-outline btn-sm" type="button" id="clear_btn">Clear</button>
+        </div>
+        <div class="filters">
+          <label class="filter-chip"><input id="filter_telnet" type="checkbox"><span>Telnet</span></label>
+          <label class="filter-chip"><input id="filter_state" type="checkbox"><span>State</span></label>
+          <label class="filter-chip"><input id="filter_dinplug" type="checkbox"><span>DINplug</span></label>
+          <label class="filter-chip"><input id="filter_ir" type="checkbox"><span>IR</span></label>
         </div>
         <div id="log_box" class="terminal">Loading...</div>
         <div class="row" style="margin-top:12px;">
@@ -335,7 +363,7 @@
       </div>
       <div class="card danger-card">
         <h3 class="card-title">Factory Reset</h3>
-        <p class="danger-text">Erases all saved settings, credentials, WireGuard data, DINplug settings, emitter and HVAC configuration, and persisted HVAC runtime state. The device will reboot into setup AP mode.</p>
+        <p class="danger-text">Erases all saved settings, credentials, DINplug settings, emitter and HVAC configuration, and persisted HVAC runtime state. The device will reboot into setup AP mode.</p>
         <button class="btn-danger" type="button" id="reset_btn">Factory Reset</button>
         <div class="status" id="reset_status">This action cannot be undone.</div>
       </div>
@@ -366,16 +394,31 @@
     const byId = id => document.getElementById(id);
     let lines = [];
     let enabled = false;
+    let filters = { telnet: true, state: true, dinplug: true, ir: true };
 
     // Tab switching
+    function setActiveTab(tabName) {
+      const tab = document.querySelector(`.tab[data-tab="${tabName}"]`);
+      const content = byId('tab-' + tabName);
+      if (!tab || !content) return;
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      tab.classList.add('active');
+      content.classList.add('active');
+      if (location.hash !== '#' + tabName) {
+        history.replaceState(null, '', '#' + tabName);
+      }
+    }
+
+    function loadTabFromLocation() {
+      const tabName = (location.hash || '#monitor').slice(1);
+      setActiveTab(tabName || 'monitor');
+    }
+
     document.querySelectorAll('.tab').forEach(tab => {
-      tab.addEventListener('click', () => {
-        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-        tab.classList.add('active');
-        byId('tab-' + tab.dataset.tab).classList.add('active');
-      });
+      tab.addEventListener('click', () => setActiveTab(tab.dataset.tab));
     });
+    window.addEventListener('hashchange', loadTabFromLocation);
 
     // Monitor functions
     function irCodes() {
@@ -398,16 +441,27 @@
     async function loadMonitor() {
       const d = await J('/api/monitor');
       enabled = !!d.enabled;
+      filters = { ...filters, ...(d.filters || {}) };
       lines = d.lines || [];
       byId('mon_state').textContent = enabled ? 'Monitor enabled' : 'Monitor disabled';
       byId('dot').classList.toggle('active', enabled);
+      byId('filter_telnet').checked = !!filters.telnet;
+      byId('filter_state').checked = !!filters.state;
+      byId('filter_dinplug').checked = !!filters.dinplug;
+      byId('filter_ir').checked = !!filters.ir;
       const log = byId('log_box');
       log.textContent = lines.join('\n');
       log.scrollTop = log.scrollHeight;
     }
 
-    async function toggleMonitor() {
-      const body = new URLSearchParams({ enabled: enabled ? '0' : '1' });
+    async function saveMonitorFilters(nextEnabled = enabled) {
+      const body = new URLSearchParams({
+        enabled: nextEnabled ? '1' : '0',
+        telnet: byId('filter_telnet').checked ? '1' : '0',
+        state: byId('filter_state').checked ? '1' : '0',
+        dinplug: byId('filter_dinplug').checked ? '1' : '0',
+        ir: byId('filter_ir').checked ? '1' : '0'
+      });
       await fetch('/monitor/toggle', { method: 'POST', body });
       await loadMonitor();
     }
@@ -418,8 +472,11 @@
       byId('mon_status').textContent = 'Log cleared.';
     }
 
-    byId('toggle_btn').addEventListener('click', () => toggleMonitor().catch(e => byId('mon_status').textContent = 'Toggle failed: ' + e));
+    byId('toggle_btn').addEventListener('click', () => saveMonitorFilters(!enabled).catch(e => byId('mon_status').textContent = 'Toggle failed: ' + e));
     byId('clear_btn').addEventListener('click', () => clearMonitor().catch(e => byId('mon_status').textContent = 'Clear failed: ' + e));
+    ['filter_telnet', 'filter_state', 'filter_dinplug', 'filter_ir'].forEach((id) => {
+      byId(id).addEventListener('change', () => saveMonitorFilters(enabled).catch(e => byId('mon_status').textContent = 'Filter update failed: ' + e));
+    });
     byId('copy_last_btn').addEventListener('click', () => {
       const codes = irCodes();
       copyText(codes.length ? codes[codes.length - 1] : '');
@@ -429,6 +486,7 @@
       copyText(codes.join('\n'));
     });
 
+    loadTabFromLocation();
     loadMonitor().catch(e => byId('mon_status').textContent = 'Load failed: ' + e);
     setInterval(() => loadMonitor().catch(e => byId('mon_status').textContent = 'Refresh failed: ' + e), 1000);
 

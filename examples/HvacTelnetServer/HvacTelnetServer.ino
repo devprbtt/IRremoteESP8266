@@ -12,15 +12,8 @@
 #include <ArduinoOTA.h>
 #include <Update.h>
 #include <Preferences.h>
-#include <WireGuard-ESP32.h>
-#include <time.h>
-#include <esp_system.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
-
-extern "C" {
-#include "wireguard.h"
-}
 
 #include <IRremoteESP8266.h>
 #include <IRac.h>
@@ -45,6 +38,8 @@ static const unsigned long kHvacStatePersistDebounceMs = 1500;
 static const uint8_t kMaxDinplugButtons = 8;
 static const uint8_t kMaxDinplugKeypads = 8;
 static const uint8_t kMaxTempSensors = 8;
+static const uint16_t kMaxTelnetLineLength = 1024;
+static const uint16_t kMaxMonitorEntryLength = 420;
 static const uint16_t kIrRecvCaptureBufferSize = 1024;
 static const uint8_t kIrRecvTimeoutMs = 50;
 static const uint32_t kProntoDefaultFrequency = 38000;
@@ -122,15 +117,6 @@ struct WebConfig {
   String password;
 };
 
-struct WireGuardConfig {
-  bool enabled = false;
-  IPAddress localIp;
-  String privateKey;
-  String peerPublicKey;
-  String endpointHost;
-  uint16_t endpointPort = 51820;
-};
-
 struct DinplugConfig {
   String gatewayHost;
   bool autoConnect = false;
@@ -157,7 +143,6 @@ struct IrReceiverConfig {
 struct Config {
   WifiConfig wifi;
   WebConfig web;
-  WireGuardConfig wg;
   DinplugConfig dinplug;
   TempSensorConfig tempSensors;
   EthernetConfig eth;
@@ -204,13 +189,14 @@ unsigned long dinplugLastRxMs = 0;
 DNSServer dnsServer;
 Preferences preferences;
 bool telnetMonitorEnabled = true;
+bool monitorLogTelnetEnabled = true;
+bool monitorLogStateEnabled = true;
+bool monitorLogDinplugEnabled = true;
+bool monitorLogIrEnabled = true;
 String serialConsoleBuffer;
 String telnetMonitorLog[kMonitorLogCapacity];
 uint16_t telnetMonitorLogStart = 0;
 uint16_t telnetMonitorLogCount = 0;
-WireGuard wgClient;
-bool wgConnected = false;
-unsigned long wgLastAttemptMs = 0;
 OneWire *tempOneWire = nullptr;
 DallasTemperature *tempBus = nullptr;
 uint8_t tempSensorCount = 0;
@@ -230,10 +216,6 @@ bool hvacStatesDirty = false;
 unsigned long hvacStatesDirtySinceMs = 0;
 unsigned long telnetLastStateBroadcastMs = 0;
 
-static const uint16_t kDefaultWireGuardPort = 51820;
-static const unsigned long kWireGuardRetryIntervalMs = 30000;
-String wgInterfacePublicKey = "";
-
 // WT32-ETH01 defaults (LAN8720 PHY)
 static const uint8_t kEthPhyAddr = 1;
 static const int8_t kEthPowerPin = 16;
@@ -247,11 +229,8 @@ String findCustomTempCode(const HvacConfig &hvac, int tempC);
 void handleSerialConsole();
 void addMonitorLogEntry(const String &line);
 void clearMonitorLog();
-void setupWireGuard();
-void ensureWireGuardConnected();
-bool generateWireGuardPrivateKeyBase64(String &outPrivateKeyB64);
-bool deriveWireGuardPublicKeyBase64(const String &privateKeyB64, String &outPublicKeyB64);
-bool ensureWireGuardKeypair(bool printStatus);
+bool sendTelnetJson(WiFiClient &client, JsonDocument &doc);
+bool monitorCategoryEnabled(const String &category);
 bool saveConfigJson(const String &json);
 bool loadConfigFromJson(const String &json, bool printErrors = true);
 bool readStoredConfigJson(String &json);
@@ -374,6 +353,16 @@ void printMonitorStatus() {
   Serial.println(telnetMonitorEnabled ? "on" : "off");
 }
 
+bool monitorCategoryEnabled(const String &categoryIn) {
+  String category = categoryIn;
+  category.toLowerCase();
+  if (category == "telnet") return monitorLogTelnetEnabled;
+  if (category == "state") return monitorLogStateEnabled;
+  if (category == "dinplug") return monitorLogDinplugEnabled;
+  if (category == "ir") return monitorLogIrEnabled;
+  return true;
+}
+
 String dinplugConnectionStatus() {
   String gatewayHost = config.dinplug.gatewayHost;
   gatewayHost.trim();
@@ -386,7 +375,7 @@ String dinplugConnectionStatus() {
 }
 
 void addMonitorLogEntry(const String &line) {
-  String entry = "[" + String(millis()) + " ms] " + line;
+  String entry = "[" + String(millis()) + " ms] " + truncateForLog(line, kMaxMonitorEntryLength);
   if (telnetMonitorLogCount < kMonitorLogCapacity) {
     uint16_t idx = (telnetMonitorLogStart + telnetMonitorLogCount) % kMonitorLogCapacity;
     telnetMonitorLog[idx] = entry;
@@ -839,15 +828,6 @@ String configToJsonString() {
   JsonObject webc = doc["web"].to<JsonObject>();
   webc["password"] = config.web.password;
 
-  JsonObject wg = doc["wireguard"].to<JsonObject>();
-  wg["enabled"] = config.wg.enabled;
-  wg["local_ip"] = config.wg.localIp.toString();
-  wg["private_key"] = config.wg.privateKey;
-  wg["interface_public_key"] = wgInterfacePublicKey;
-  wg["peer_public_key"] = config.wg.peerPublicKey;
-  wg["endpoint_host"] = config.wg.endpointHost;
-  wg["endpoint_port"] = config.wg.endpointPort;
-
   JsonObject din = doc["dinplug"].to<JsonObject>();
   String gatewayHost = config.dinplug.gatewayHost;
   gatewayHost.trim();
@@ -961,12 +941,6 @@ void clearConfig() {
   config.wifi.subnet = IPAddress();
   config.wifi.dns = IPAddress();
   config.web.password = "";
-  config.wg.enabled = false;
-  config.wg.localIp = IPAddress();
-  config.wg.privateKey = "";
-  config.wg.peerPublicKey = "";
-  config.wg.endpointHost = "";
-  config.wg.endpointPort = kDefaultWireGuardPort;
   config.dinplug.gatewayHost = "";
   config.dinplug.autoConnect = false;
   config.tempSensors.enabled = false;
@@ -1043,16 +1017,6 @@ bool loadConfigFromJson(const String &json, bool printErrors) {
     config.web.password = webc["password"] | "";
   }
 
-  JsonObject wg = doc["wireguard"];
-  if (!wg.isNull()) {
-    config.wg.enabled = wg["enabled"] | false;
-    config.wg.localIp.fromString(wg["local_ip"] | "");
-    config.wg.privateKey = wg["private_key"] | "";
-    config.wg.peerPublicKey = wg["peer_public_key"] | "";
-    config.wg.endpointHost = wg["endpoint_host"] | "";
-    config.wg.endpointPort = wg["endpoint_port"] | kDefaultWireGuardPort;
-    if (config.wg.endpointPort == 0) config.wg.endpointPort = kDefaultWireGuardPort;
-  }
   JsonObject din = doc["dinplug"];
   if (!din.isNull()) {
     String gatewayHost = din["gateway_host"] | "";
@@ -1091,9 +1055,6 @@ bool loadConfigFromJson(const String &json, bool printErrors) {
     config.irReceiver.gpio = irrx["gpio"] | 14;
     config.irReceiver.mode = normalizeIrReceiverMode(irrx["mode"] | "auto");
   }
-  bool generatedWgKey = ensureWireGuardKeypair(false);
-  if (generatedWgKey) saveConfig();
-
   config.hostname = doc["hostname"] | kDefaultHostname;
 
   config.telnetPort = doc["telnet_port"] | kDefaultTelnetPort;
@@ -1259,8 +1220,6 @@ void clearPersistedData() {
   initHvacRuntimeStates();
   hvacStatesDirty = false;
   hvacStatesDirtySinceMs = 0;
-  wgConnected = false;
-  wgInterfacePublicKey = "";
   clearMonitorLog();
 }
 
@@ -1396,12 +1355,13 @@ bool hvacStateChanged(const HvacRuntimeState &a, const HvacRuntimeState &b) {
 
 void logHvacStateChange(const String &id, const HvacRuntimeState &after, int8_t sourceTelnetSlot) {
   if (!telnetMonitorEnabled) return;
+  if (!monitorLogStateEnabled) return;
   if (sourceTelnetSlot >= 0) return;
   JsonDocument msg;
   writeStateJson(msg.to<JsonObject>(), id, after);
   String payload;
   serializeJson(msg, payload);
-  addMonitorLogEntry("TX state " + payload);
+  addMonitorLogEntry("TX state " + truncateForLog(payload, 300));
 }
 
 void ensureHvacStateInitialized(uint8_t idx) {
@@ -1547,12 +1507,18 @@ bool applyDinplugAction(uint8_t hvacIndex, const DinplugButtonBinding &binding, 
   return ok;
 }
 
-void sendTelnetJson(WiFiClient &client, JsonDocument &doc) {
+bool sendTelnetJson(WiFiClient &client, JsonDocument &doc) {
+  if (!client || !client.connected()) return false;
   String payload;
   payload.reserve(512);
   serializeJson(doc, payload);
   payload += "\r\n";
-  client.print(payload);
+  size_t written = client.write(reinterpret_cast<const uint8_t *>(payload.c_str()), payload.length());
+  if (written != payload.length()) {
+    client.stop();
+    return false;
+  }
+  return true;
 }
 
 void broadcastStateToTelnetClients(const String &id, const HvacRuntimeState &state, int8_t excludeSlot) {
@@ -1562,7 +1528,10 @@ void broadcastStateToTelnetClients(const String &id, const HvacRuntimeState &sta
     if (static_cast<int8_t>(i) == excludeSlot) continue;
     WiFiClient &c = telnetClients[i];
     if (!c || !c.connected()) continue;
-    sendTelnetJson(c, msg);
+    if (!sendTelnetJson(c, msg)) {
+      Serial.print("telnet: dropped stalled client slot ");
+      Serial.println(i);
+    }
   }
 }
 
@@ -1571,7 +1540,7 @@ void sendAllStatesToTelnetClient(WiFiClient &client) {
     ensureHvacStateInitialized(i);
     JsonDocument msg;
     writeStateJson(msg.to<JsonObject>(), config.hvacs[i].id, hvacStates[i]);
-    sendTelnetJson(client, msg);
+    if (!sendTelnetJson(client, msg)) return;
   }
 }
 
@@ -1833,7 +1802,7 @@ void handleTelnetPeriodicStateBroadcast() {
     if (!c || !c.connected()) continue;
     sendAllStatesToTelnetClient(c);
   }
-  if (telnetMonitorEnabled) {
+  if (telnetMonitorEnabled && monitorLogTelnetEnabled) {
     addMonitorLogEntry("TX periodic_state_broadcast clients=" + String(activeTelnetClientCount()));
   }
 }
@@ -1981,7 +1950,7 @@ String pageHeader(const String &title) {
   html += ".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;}";
   html += ".pill{display:inline-block;background:#1e293b;color:#e2e8f0;padding:2px 8px;border-radius:999px;font-size:12px;margin-left:6px;}";
   html += "</style></head><body><div class='wrap'>";
-  html += "<nav><a href='/'>Home</a><a href='/config'>Config</a><a href='/emitters'>Emitters</a><a href='/hvacs'>HVACs</a><a href='/hvacs/test'>Test HVAC</a><a href='/dinplug'>DINplug</a><a href='/monitor'>Monitor</a><a href='/firmware'>Firmware</a><a href='/config/upload'>Upload</a><a href='/config/download'>Download</a></nav>";
+  html += "<nav><a href='/'>Home</a><a href='/config'>Config</a><a href='/emitters'>Emitters</a><a href='/hvacs'>HVACs</a><a href='/hvacs/test'>Test HVAC</a><a href='/dinplug'>DINplug</a><a href='/system#monitor'>Monitor</a><a href='/system#firmware'>Firmware</a><a href='/system#backup'>Upload</a><a href='/config/download'>Download</a></nav>";
   return html;
 }
 
@@ -2006,10 +1975,6 @@ void handleHome() {
   html += "<p>Network mode: <strong>" + networkModeString() + "</strong></p>";
   html += "<p>IP: <strong>" + networkLocalIp().toString() + "</strong></p>";
   html += "<p>Hostname: <strong>" + htmlEscape(config.hostname.length() ? config.hostname : kDefaultHostname) + ".local</strong></p>";
-  html += "<p>WireGuard: <strong>" + String(config.wg.enabled ? (wgConnected ? "connected" : "enabled (not connected)") : "disabled") + "</strong></p>";
-  if (config.wg.enabled && config.wg.localIp != IPAddress()) {
-    html += "<p>WireGuard IP: <strong>" + config.wg.localIp.toString() + "</strong></p>";
-  }
   html += "<p>DINplug: <strong>" + htmlEscape(dinplugConnectionStatus()) + "</strong></p>";
   html += "<p>Emitters: <strong>" + String(config.emitterCount) + "</strong></p>";
   html += "<p>IR receiver: <strong>" + String(config.irReceiver.enabled ? "enabled" : "disabled") + "</strong></p>";
@@ -2081,20 +2046,6 @@ void handleConfigPage() {
   html += "<h3>Web Password</h3>";
   html += "<label>Admin password (blank = no auth)</label>";
   html += "<input name='webpass' type='password' value='" + htmlEscape(config.web.password) + "'>";
-  html += "<h3>WireGuard Client</h3>";
-  html += "<div class='row'><input type='checkbox' id='wgEnabled' name='wg_enabled'" +
-          String(config.wg.enabled ? " checked" : "") + "><label for='wgEnabled'>Enable WireGuard client</label></div>";
-  html += "<p>Interface public key: <code>" + htmlEscape(wgInterfacePublicKey.length() ? wgInterfacePublicKey : "(not available)") + "</code></p>";
-  html += "<label>Local tunnel IP</label>";
-  html += "<input name='wg_local_ip' value='" + htmlEscape(config.wg.localIp.toString()) + "' placeholder='10.10.10.2'>";
-  html += "<label>Interface private key</label>";
-  html += "<input name='wg_private_key' type='password' value='" + htmlEscape(config.wg.privateKey) + "' placeholder='base64 private key'>";
-  html += "<label>Peer public key</label>";
-  html += "<input name='wg_peer_public_key' value='" + htmlEscape(config.wg.peerPublicKey) + "' placeholder='base64 peer public key'>";
-  html += "<label>Peer endpoint host/IP</label>";
-  html += "<input name='wg_endpoint_host' value='" + htmlEscape(config.wg.endpointHost) + "' placeholder='vpn.example.com'>";
-  html += "<label>Peer endpoint UDP port</label>";
-  html += "<input name='wg_endpoint_port' type='number' min='1' max='65535' value='" + String(config.wg.endpointPort) + "'>";
   html += "<h3>DS18B20 Temperature Sensors</h3>";
   html += "<div class='row'><input type='checkbox' id='tsEnabled' name='ts_enabled'" +
           String(config.tempSensors.enabled ? " checked" : "") + "><label for='tsEnabled'>Enable DS18B20 bus</label></div>";
@@ -2172,14 +2123,6 @@ void handleConfigSave() {
   config.wifi.subnet.fromString(web.arg("subnet"));
   config.wifi.dns.fromString(web.arg("dns"));
   config.web.password = web.arg("webpass");
-  config.wg.enabled = web.hasArg("wg_enabled");
-  config.wg.localIp.fromString(web.arg("wg_local_ip"));
-  config.wg.privateKey = web.arg("wg_private_key");
-  config.wg.peerPublicKey = web.arg("wg_peer_public_key");
-  config.wg.endpointHost = web.arg("wg_endpoint_host");
-  uint16_t wgPort = web.arg("wg_endpoint_port").toInt();
-  if (wgPort == 0) wgPort = kDefaultWireGuardPort;
-  config.wg.endpointPort = wgPort;
   config.tempSensors.enabled = web.hasArg("ts_enabled");
   int tsGpio = web.arg("ts_gpio").toInt();
   if (tsGpio < 0 || tsGpio > 39) tsGpio = 4;
@@ -2202,7 +2145,6 @@ void handleConfigSave() {
   if (irrxGpio < 0 || irrxGpio > 39) irrxGpio = 14;
   config.irReceiver.gpio = static_cast<uint8_t>(irrxGpio);
   config.irReceiver.mode = normalizeIrReceiverMode(web.arg("irrx_mode"));
-  ensureWireGuardKeypair(true);
   String hostname = web.arg("hostname");
   hostname.trim();
   if (hostname.length() == 0) hostname = kDefaultHostname;
@@ -3112,9 +3054,6 @@ void handleApiStatus() {
   doc["ip"] = networkLocalIp().toString();
   doc["hostname"] = config.hostname.length() ? config.hostname : kDefaultHostname;
   doc["telnet_port"] = config.telnetPort;
-  doc["wireguard_enabled"] = config.wg.enabled;
-  doc["wireguard_connected"] = wgConnected;
-  doc["wireguard_ip"] = config.wg.localIp.toString();
   doc["dinplug_status"] = dinplugConnectionStatus();
   doc["emitter_count"] = config.emitterCount;
   doc["hvac_count"] = config.hvacCount;
@@ -3614,6 +3553,11 @@ void handleApiMonitor() {
   if (!checkAuth()) { requestAuth(); return; }
   JsonDocument doc;
   doc["enabled"] = telnetMonitorEnabled;
+  JsonObject filters = doc["filters"].to<JsonObject>();
+  filters["telnet"] = monitorLogTelnetEnabled;
+  filters["state"] = monitorLogStateEnabled;
+  filters["dinplug"] = monitorLogDinplugEnabled;
+  filters["ir"] = monitorLogIrEnabled;
   JsonArray lines = doc["lines"].to<JsonArray>();
   for (uint16_t i = 0; i < telnetMonitorLogCount; i++) {
     uint16_t idx = (telnetMonitorLogStart + i) % kMonitorLogCapacity;
@@ -3639,10 +3583,35 @@ void handleMonitorToggle() {
   String enabled = web.arg("enabled");
   enabled.toLowerCase();
   telnetMonitorEnabled = (enabled == "1" || enabled == "true" || enabled == "on");
+  if (web.hasArg("telnet")) {
+    String value = web.arg("telnet");
+    value.toLowerCase();
+    monitorLogTelnetEnabled = (value == "1" || value == "true" || value == "on");
+  }
+  if (web.hasArg("state")) {
+    String value = web.arg("state");
+    value.toLowerCase();
+    monitorLogStateEnabled = (value == "1" || value == "true" || value == "on");
+  }
+  if (web.hasArg("dinplug")) {
+    String value = web.arg("dinplug");
+    value.toLowerCase();
+    monitorLogDinplugEnabled = (value == "1" || value == "true" || value == "on");
+  }
+  if (web.hasArg("ir")) {
+    String value = web.arg("ir");
+    value.toLowerCase();
+    monitorLogIrEnabled = (value == "1" || value == "true" || value == "on");
+  }
   printMonitorStatus();
   JsonDocument doc;
   doc["ok"] = true;
   doc["enabled"] = telnetMonitorEnabled;
+  JsonObject filters = doc["filters"].to<JsonObject>();
+  filters["telnet"] = monitorLogTelnetEnabled;
+  filters["state"] = monitorLogStateEnabled;
+  filters["dinplug"] = monitorLogDinplugEnabled;
+  filters["ir"] = monitorLogIrEnabled;
   String out;
   serializeJson(doc, out);
   web.send(200, "application/json", out);
@@ -3663,7 +3632,7 @@ void handleIrLearnStart() {
     doc["ok"] = true;
     doc["active"] = true;
     doc["encoding"] = irLearnEncoding;
-    addMonitorLogEntry("ir-learn start encoding=" + irLearnEncoding);
+    if (telnetMonitorEnabled && monitorLogIrEnabled) addMonitorLogEntry("ir-learn start encoding=" + irLearnEncoding);
   }
   String out;
   serializeJson(doc, out);
@@ -3779,7 +3748,8 @@ void setupWeb() {
   web.on("/raw/test", HTTP_POST, handleRawTest);
   web.on("/monitor", HTTP_GET, []() {
     if (!checkAuth()) { requestAuth(); return; }
-    if (!streamSpiffsFile("/monitor.html", "text/html; charset=utf-8")) handleMonitorPage();
+    web.sendHeader("Location", "/system#monitor", true);
+    web.send(302, "text/plain", "");
   });
   web.on("/api/monitor", HTTP_GET, handleApiMonitor);
   web.on("/monitor/clear", HTTP_POST, handleMonitorClear);
@@ -3808,12 +3778,14 @@ void setupWeb() {
   web.on("/config/download", HTTP_GET, handleConfigDownload);
   web.on("/config/upload", HTTP_GET, []() {
     if (!checkAuth()) { requestAuth(); return; }
-    if (!streamSpiffsFile("/config_upload.html", "text/html; charset=utf-8")) handleConfigUploadPage();
+    web.sendHeader("Location", "/system#backup", true);
+    web.send(302, "text/plain", "");
   });
   web.on("/config/upload", HTTP_POST, handleConfigUploadDone, handleConfigUpload);
   web.on("/firmware", HTTP_GET, []() {
     if (!checkAuth()) { requestAuth(); return; }
-    if (!streamSpiffsFile("/firmware.html", "text/html; charset=utf-8")) handleFirmwarePage();
+    web.sendHeader("Location", "/system#firmware", true);
+    web.send(302, "text/plain", "");
   });
   web.on("/firmware/update", HTTP_POST, handleFirmwareUpdate, handleFirmwareUpload);
   web.on("/spiffs/update", HTTP_POST, handleFilesystemUpdate, handleFilesystemUpload);
@@ -3841,10 +3813,10 @@ bool sendDinplugCommand(const String &cmd) {
   if (written == 0) {
     dinplugClient.stop();
     dinplugConnected = false;
-    if (telnetMonitorEnabled) addMonitorLogEntry("din: tx failed, reconnecting");
+    if (telnetMonitorEnabled && monitorLogDinplugEnabled) addMonitorLogEntry("din: tx failed, reconnecting");
     return false;
   }
-  if (telnetMonitorEnabled) addMonitorLogEntry("din-tx " + cmd);
+  if (telnetMonitorEnabled && monitorLogDinplugEnabled) addMonitorLogEntry("din-tx " + cmd);
   return true;
 }
 
@@ -3895,7 +3867,7 @@ void ensureDinplugConnected(bool forceNow) {
     dinplugLastKeepAliveMs = millis();
     dinplugLastRxMs = millis();
     Serial.println("dinplug: connected");
-    addMonitorLogEntry("din: connected");
+    if (telnetMonitorEnabled && monitorLogDinplugEnabled) addMonitorLogEntry("din: connected");
     sendDinplugCommand("REFRESH");
   } else {
     Serial.println("dinplug: connect failed");
@@ -3923,7 +3895,7 @@ void processDinplugLine(const String &line) {
   String trimmed = line;
   trimmed.trim();
   dinplugLastRxMs = millis();
-  if (telnetMonitorEnabled) addMonitorLogEntry("din-rx " + trimmed);
+  if (telnetMonitorEnabled && monitorLogDinplugEnabled) addMonitorLogEntry("din-rx " + trimmed);
   if (!trimmed.startsWith("R:BTN ")) return;
   int firstSpace = trimmed.indexOf(' ');
   int secondSpace = trimmed.indexOf(' ', firstSpace + 1);
@@ -3951,7 +3923,7 @@ void handleDinplug() {
     dinplugLastKeepAliveMs = now;
   }
   if (dinplugLastRxMs > 0 && (now - dinplugLastRxMs) > kDinplugRxTimeoutMs) {
-    if (telnetMonitorEnabled) addMonitorLogEntry("din: rx timeout, reconnecting");
+    if (telnetMonitorEnabled && monitorLogDinplugEnabled) addMonitorLogEntry("din: rx timeout, reconnecting");
     dinplugClient.stop();
     dinplugConnected = false;
     ensureDinplugConnected(true);
@@ -4006,17 +3978,17 @@ String findCustomTempCode(const HvacConfig &hvac, int tempC) {
 }
 
 void handleTelnetLine(WiFiClient &client, const String &line, int8_t sourceTelnetSlot) {
-  if (telnetMonitorEnabled) {
+  if (telnetMonitorEnabled && monitorLogTelnetEnabled) {
     String rxMsg = "RX slot=" + String(sourceTelnetSlot) + " from " +
                    client.remoteIP().toString() + ":" + String(client.remotePort()) +
-                   " line=" + line;
+                   " line=" + truncateForLog(line, 240);
     addMonitorLogEntry(rxMsg);
-    Serial.println("telnet-" + rxMsg);
+    Serial.println(truncateForLog("telnet-" + rxMsg, 280));
   }
   JsonDocument doc;
   DeserializationError err = deserializeJson(doc, line);
   if (err) {
-    if (telnetMonitorEnabled) {
+    if (telnetMonitorEnabled && monitorLogTelnetEnabled) {
       addMonitorLogEntry("RX parse=invalid_json");
       Serial.println("telnet-rx parse=invalid_json");
     }
@@ -4026,13 +3998,18 @@ void handleTelnetLine(WiFiClient &client, const String &line, int8_t sourceTelne
   JsonDocument resp;
   String cmd = doc["cmd"] | "send";
   processCommand(doc, resp, sourceTelnetSlot);
-  sendTelnetJson(client, resp);
-  if (telnetMonitorEnabled) {
+  if (!sendTelnetJson(client, resp)) {
+    Serial.print("telnet: failed to reply slot ");
+    Serial.println(sourceTelnetSlot);
+    return;
+  }
+  if (telnetMonitorEnabled && monitorLogTelnetEnabled) {
     String respStr;
     serializeJson(resp, respStr);
-    String txMsg = "TX slot=" + String(sourceTelnetSlot) + " cmd=" + cmd + " line=" + respStr;
+    String txMsg = "TX slot=" + String(sourceTelnetSlot) + " cmd=" + cmd + " line=" +
+                   truncateForLog(respStr, 240);
     addMonitorLogEntry(txMsg);
-    Serial.println("telnet-" + txMsg);
+    Serial.println(truncateForLog("telnet-" + txMsg, 280));
   } else {
     Serial.print("telnet: ");
     Serial.println(cmd);
@@ -4081,6 +4058,11 @@ void handleTelnet() {
         if (line.length()) handleTelnetLine(c, line, static_cast<int8_t>(i));
       } else {
         telnetBuffers[i] += ch;
+        if (telnetBuffers[i].length() > kMaxTelnetLineLength) {
+          telnetBuffers[i] = "";
+          respondTelnetError(c, "line_too_long");
+          break;
+        }
       }
     }
   }
@@ -4235,119 +4217,6 @@ void startWifi() {
   }
 }
 
-bool generateWireGuardPrivateKeyBase64(String &outPrivateKeyB64) {
-  uint8_t privateKey[WIREGUARD_PRIVATE_KEY_LEN];
-  esp_fill_random(privateKey, sizeof(privateKey));
-  privateKey[0] &= 248;
-  privateKey[31] &= 127;
-  privateKey[31] |= 64;
-  char out[128];
-  size_t outLen = sizeof(out);
-  if (!wireguard_base64_encode(privateKey, sizeof(privateKey), out, &outLen)) return false;
-  outPrivateKeyB64 = String(out);
-  return true;
-}
-
-bool deriveWireGuardPublicKeyBase64(const String &privateKeyB64, String &outPublicKeyB64) {
-  uint8_t privateKey[WIREGUARD_PRIVATE_KEY_LEN];
-  size_t privateKeyLen = sizeof(privateKey);
-  if (!wireguard_base64_decode(privateKeyB64.c_str(), privateKey, &privateKeyLen) ||
-      privateKeyLen != WIREGUARD_PRIVATE_KEY_LEN) {
-    return false;
-  }
-  wireguard_platform_init();
-  struct wireguard_device device;
-  memset(&device, 0, sizeof(device));
-  if (!wireguard_device_init(&device, privateKey)) return false;
-
-  char out[128];
-  size_t outLen = sizeof(out);
-  if (!wireguard_base64_encode(device.public_key, WIREGUARD_PUBLIC_KEY_LEN, out, &outLen)) return false;
-  outPublicKeyB64 = String(out);
-  return true;
-}
-
-bool ensureWireGuardKeypair(bool printStatus) {
-  bool generated = false;
-  if (config.wg.privateKey.length() == 0) {
-    String generatedKey;
-    if (generateWireGuardPrivateKeyBase64(generatedKey)) {
-      config.wg.privateKey = generatedKey;
-      generated = true;
-      if (printStatus) Serial.println("wireguard: generated interface private key");
-    } else if (printStatus) {
-      Serial.println("wireguard: failed to generate interface private key");
-    }
-  }
-
-  if (!deriveWireGuardPublicKeyBase64(config.wg.privateKey, wgInterfacePublicKey)) {
-    wgInterfacePublicKey = "";
-    if (config.wg.privateKey.length() && printStatus) {
-      Serial.println("wireguard: invalid interface private key");
-    }
-  }
-  return generated;
-}
-
-void setupWireGuard() {
-  if (!config.wg.enabled) {
-    if (wgConnected) {
-      wgClient.end();
-      wgConnected = false;
-    }
-    return;
-  }
-  if (!networkReady()) return;
-  if (config.wg.localIp == IPAddress() || config.wg.privateKey.length() == 0 ||
-      config.wg.peerPublicKey.length() == 0 || config.wg.endpointHost.length() == 0) {
-    Serial.println("wireguard: config incomplete; skipping");
-    wgConnected = false;
-    return;
-  }
-
-  // WireGuard handshake requires valid system time.
-  configTime(0, 0, "pool.ntp.org", "time.nist.gov", "time.google.com");
-  time_t now = time(nullptr);
-  unsigned long waitStart = millis();
-  while (now < 1700000000 && millis() - waitStart < 12000) {
-    delay(250);
-    now = time(nullptr);
-  }
-  if (now < 1700000000) {
-    Serial.println("wireguard: NTP sync timeout; skipping");
-    wgConnected = false;
-    return;
-  }
-
-  Serial.print("wireguard: connecting to ");
-  Serial.print(config.wg.endpointHost);
-  Serial.print(":");
-  Serial.println(config.wg.endpointPort);
-  wgConnected = wgClient.begin(
-      config.wg.localIp,
-      config.wg.privateKey.c_str(),
-      config.wg.endpointHost.c_str(),
-      config.wg.peerPublicKey.c_str(),
-      config.wg.endpointPort);
-  if (wgConnected) {
-    Serial.print("wireguard: connected local IP ");
-    Serial.println(config.wg.localIp);
-  } else {
-    Serial.println("wireguard: begin failed");
-  }
-  wgLastAttemptMs = millis();
-}
-
-void ensureWireGuardConnected() {
-  if (!config.wg.enabled) return;
-  if (wgConnected && wgClient.is_initialized()) return;
-  if (!networkReady()) return;
-  unsigned long now = millis();
-  if ((now - wgLastAttemptMs) < kWireGuardRetryIntervalMs) return;
-  wgLastAttemptMs = now;
-  setupWireGuard();
-}
-
 void setupTemperatureSensors() {
   tempSensorCount = 0;
   tempLastReadMs = 0;
@@ -4474,14 +4343,14 @@ void handleIrReceiver() {
       irLearnCode = learned;
       irLearnActive = false;
       irLearnError = "";
-      addMonitorLogEntry("ir-learn captured encoding=" + targetEnc);
+      if (telnetMonitorEnabled && monitorLogIrEnabled) addMonitorLogEntry("ir-learn captured encoding=" + targetEnc);
     }
   }
 
   if (irReceiverCapture.overflow) line += " overflow=1";
   line = truncateForLog(line);
   Serial.println(line);
-  if (telnetMonitorEnabled) addMonitorLogEntry(line);
+  if (telnetMonitorEnabled && monitorLogIrEnabled) addMonitorLogEntry(line);
 
   irReceiver->resume();
 }
@@ -4503,7 +4372,6 @@ void setup() {
   setupIrReceiver();
   rebuildEmitters();
   startWifi();
-  setupWireGuard();
   setupArduinoOta();
   setupWeb();
   if (telnetServer) {
@@ -4531,7 +4399,6 @@ void loop() {
   handleTemperatureSensors();
   handleHvacStatePersistence();
   handleIrReceiver();
-  ensureWireGuardConnected();
   dnsServer.processNextRequest();
   ArduinoOTA.handle();
 }
