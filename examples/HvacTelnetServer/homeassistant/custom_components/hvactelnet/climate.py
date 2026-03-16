@@ -91,7 +91,7 @@ class HvacTelnetClimateEntity(CoordinatorEntity[HvacTelnetCoordinator], ClimateE
         super().__init__(coordinator)
         self._description = description
         self._attr_unique_id = f"{entry_id}_{description.hvac_id}"
-        self._attr_name = f"HVAC {description.hvac_id}"
+        self._attr_name = _display_name(description)
 
     @property
     def hvac_id(self) -> str:
@@ -175,6 +175,7 @@ class HvacTelnetClimateEntity(CoordinatorEntity[HvacTelnetCoordinator], ClimateE
                 "mode": HVAC_MODE_TO_API[hvac_mode],
                 "temp": self.target_temperature or 24,
                 "fan": self.fan_mode or "auto",
+                "light": "true",
             },
         )
 
@@ -190,6 +191,7 @@ class HvacTelnetClimateEntity(CoordinatorEntity[HvacTelnetCoordinator], ClimateE
                 "mode": HVAC_MODE_TO_API.get(self.hvac_mode or HVACMode.AUTO, "auto"),
                 "temp": round(float(temperature)),
                 "fan": self.fan_mode or "auto",
+                "light": "true",
             },
         )
 
@@ -204,6 +206,7 @@ class HvacTelnetClimateEntity(CoordinatorEntity[HvacTelnetCoordinator], ClimateE
                 "mode": HVAC_MODE_TO_API.get(self.hvac_mode or HVACMode.AUTO, "auto"),
                 "temp": self.target_temperature or 24,
                 "fan": fan_mode,
+                "light": "true",
             },
         )
 
@@ -219,6 +222,7 @@ class HvacTelnetClimateEntity(CoordinatorEntity[HvacTelnetCoordinator], ClimateE
                 ),
                 "temp": self.target_temperature or 24,
                 "fan": self.fan_mode or "auto",
+                "light": "true",
             },
         )
 
@@ -243,3 +247,10 @@ def _as_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _display_name(description: HvacDescription) -> str:
+    """Return the entity name from the configured profile when available."""
+    if description.profile_name:
+        return description.profile_name
+    return f"HVAC {description.hvac_id}"

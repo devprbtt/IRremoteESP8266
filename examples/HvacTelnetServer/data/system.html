@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
   <meta name="theme-color" content="#0a0e14">
-  <title>System - IR HVAC Telnet</title>
+  <title>System - IR Server Telnet</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; }
     :root {
@@ -274,6 +274,116 @@
       color: var(--text-muted);
       font-weight: 400;
     }
+    .api-grid {
+      display: grid;
+      gap: 12px;
+    }
+    .api-section {
+      padding: 14px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      background: var(--surface-elevated);
+    }
+    .api-section h4 {
+      margin: 0 0 8px;
+      font-size: 0.88rem;
+    }
+    .api-section p,
+    .api-section li {
+      font-size: 0.82rem;
+      color: var(--text-muted);
+    }
+    .api-section ul {
+      margin: 8px 0 0;
+      padding-left: 18px;
+    }
+    .code-toolbar {
+      display: flex;
+      justify-content: flex-end;
+      margin-top: 10px;
+      margin-bottom: -2px;
+    }
+    .code-block {
+      margin-top: 10px;
+      padding: 12px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      background: var(--terminal-bg);
+      color: var(--terminal-text);
+      font-family: Consolas, monospace;
+      font-size: 0.74rem;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .api-endpoint {
+      display: inline-block;
+      margin: 6px 8px 0 0;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: rgba(59, 130, 246, 0.12);
+      color: #93c5fd;
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+    .api-status {
+      margin-top: 12px;
+      color: var(--text-muted);
+      font-size: 0.78rem;
+    }
+    .api-tester-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      gap: 8px;
+      align-items: center;
+      margin-top: 10px;
+    }
+    .api-select {
+      width: 100%;
+      padding: 12px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      font-size: 0.84rem;
+    }
+    .api-output {
+      min-height: 180px;
+      max-height: 320px;
+      overflow: auto;
+    }
+    .signal-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 6px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      border: 1px solid transparent;
+    }
+    .signal-badge.good {
+      background: rgba(34, 197, 94, 0.14);
+      color: #86efac;
+      border-color: rgba(34, 197, 94, 0.28);
+    }
+    .signal-badge.ok {
+      background: rgba(245, 158, 11, 0.14);
+      color: #fcd34d;
+      border-color: rgba(245, 158, 11, 0.28);
+    }
+    .signal-badge.bad {
+      background: rgba(239, 68, 68, 0.14);
+      color: #fca5a5;
+      border-color: rgba(239, 68, 68, 0.28);
+    }
+    .signal-badge.offline {
+      background: rgba(122, 138, 157, 0.14);
+      color: #cbd5e1;
+      border-color: rgba(122, 138, 157, 0.28);
+    }
     .danger-card {
       border-color: rgba(239, 68, 68, 0.45);
       background: linear-gradient(180deg, rgba(239,68,68,0.08), rgba(239,68,68,0.03));
@@ -288,6 +398,7 @@
       .row { flex-direction: column; align-items: stretch; }
       .row .btn-sm { width: 100%; }
       .filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .api-tester-row { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -300,6 +411,8 @@
 
     <div class="tabs">
       <button class="tab active" data-tab="monitor">Monitor</button>
+      <button class="tab" data-tab="stats">Stats</button>
+      <button class="tab" data-tab="api">API</button>
       <button class="tab" data-tab="firmware">Firmware</button>
       <button class="tab" data-tab="backup">Backup</button>
     </div>
@@ -325,6 +438,138 @@
           <button class="btn-outline btn-sm" type="button" id="copy_all_btn">Copy All IR</button>
         </div>
         <div class="status" id="mon_status">Ready</div>
+      </div>
+    </div>
+
+    <!-- STATS TAB -->
+    <div id="tab-stats" class="tab-content">
+      <div class="card">
+        <h3 class="card-title">Live System Stats</h3>
+        <div class="link-grid" style="gap:12px;">
+          <div class="link-card">Uptime<small id="stat_uptime">Loading...</small></div>
+          <div class="link-card">Free Heap<small id="stat_heap_free">Loading...</small></div>
+          <div class="link-card">Min Free Heap<small id="stat_heap_min">Loading...</small></div>
+          <div class="link-card">Max Alloc Block<small id="stat_heap_max">Loading...</small></div>
+          <div class="link-card">Network<small id="stat_network">Loading...</small></div>
+          <div class="link-card">WiFi Signal<small id="stat_wifi_signal">Loading...</small></div>
+          <div class="link-card">Telnet Clients<small id="stat_telnet">Loading...</small></div>
+          <div class="link-card">DINplug<small id="stat_dinplug">Loading...</small></div>
+          <div class="link-card">Config Counts<small id="stat_counts">Loading...</small></div>
+        </div>
+        <div class="status" id="stats_status">Refreshing every 5 seconds while the Stats tab is open.</div>
+      </div>
+    </div>
+
+    <!-- API TAB -->
+    <div id="tab-api" class="tab-content">
+      <div class="card">
+        <h3 class="card-title">Third-Party Integration API</h3>
+        <div class="api-grid">
+          <div class="api-section">
+            <h4>Overview</h4>
+            <p>IR Server Telnet exposes two integration paths: a telnet JSON command socket for runtime control and a small HTTP API for configuration, status, monitor, and IR learning.</p>
+            <div>
+              <span class="api-endpoint">TELNET :4998</span>
+              <span class="api-endpoint">HTTP /api/*</span>
+              <span class="api-endpoint">HTTP /devices</span>
+            </div>
+          </div>
+
+          <div class="api-section">
+            <h4>Telnet JSON Commands</h4>
+            <ul>
+              <li><code>list</code>: returns emitters and configured device summaries</li>
+              <li><code>get</code>: returns one device state by <code>id</code></li>
+              <li><code>get_all</code>: returns all current device states</li>
+              <li><code>send</code>: sends an HVAC or custom command to one device</li>
+              <li><code>push_all</code>: pushes all current states to connected telnet clients</li>
+              <li><code>raw</code>: sends ad-hoc IR payloads by encoding</li>
+            </ul>
+            <div class="code-toolbar"><button class="btn-outline btn-sm api-copy-btn" type="button" data-copy-target="api_telnet_examples">Copy Examples</button></div>
+            <div class="code-block" id="api_telnet_examples">{"cmd":"list"}
+{"cmd":"get","id":"1"}
+{"cmd":"get_all"}
+{"cmd":"send","id":"1","power":"on","mode":"cool","temp":24,"fan":"auto","light":"true"}
+{"cmd":"send","id":"5","command_name":"power_on"}
+{"cmd":"raw","emitter":0,"encoding":"pronto","code":"0000 006D 0000 0022 ..."}</div>
+          </div>
+
+          <div class="api-section">
+            <h4>HTTP API Endpoints</h4>
+            <ul>
+              <li><code>GET /api/status</code>: live runtime status, memory, network, counts, DINplug usage</li>
+              <li><code>GET /api/meta</code>: UI metadata, capabilities, and limits</li>
+              <li><code>GET /api/config</code>: current saved configuration JSON</li>
+              <li><code>POST /api/config/save</code>: replace saved configuration JSON</li>
+              <li><code>GET /api/monitor?limit=60</code>: monitor state and recent lines</li>
+              <li><code>GET /api/wifi/scan</code>: available WiFi networks</li>
+            </ul>
+            <div class="code-toolbar"><button class="btn-outline btn-sm api-copy-btn" type="button" data-copy-target="api_http_curl">Copy curl Examples</button></div>
+            <div class="code-block" id="api_http_curl">curl http://ir-server.local/api/status
+curl http://ir-server.local/api/meta
+curl http://ir-server.local/api/config
+curl http://ir-server.local/api/monitor?limit=60
+curl http://ir-server.local/api/wifi/scan
+curl -X POST http://ir-server.local/api/config/save \
+  -H "Content-Type: application/json" \
+  --data @config.json</div>
+          </div>
+
+          <div class="api-section">
+            <h4>IR Learn API</h4>
+            <p>These endpoints are used by the device UI and can also be called directly if the IR receiver is enabled in Config.</p>
+            <ul>
+              <li><code>POST /api/ir/learn/start</code> with <code>encoding</code> set to <code>pronto</code>, <code>gc</code>, <code>racepoint</code>, or <code>rawhex</code></li>
+              <li><code>GET /api/ir/learn/poll</code> to check progress and collect the captured code</li>
+              <li><code>POST /api/ir/learn/cancel</code> to abort a pending learn session</li>
+            </ul>
+            <div class="code-toolbar"><button class="btn-outline btn-sm api-copy-btn" type="button" data-copy-target="api_irlearn_curl">Copy Learn Commands</button></div>
+            <div class="code-block" id="api_irlearn_curl">curl -X POST http://ir-server.local/api/ir/learn/start \
+  -d "encoding=pronto"
+
+curl http://ir-server.local/api/ir/learn/poll
+
+curl -X POST http://ir-server.local/api/ir/learn/cancel</div>
+          </div>
+
+          <div class="api-section">
+            <h4>Response Examples</h4>
+            <p>Standard HVAC devices return runtime state. Custom profiles return the registered command catalog plus the command sent most recently.</p>
+            <div class="code-toolbar"><button class="btn-outline btn-sm api-copy-btn" type="button" data-copy-target="api_response_examples">Copy Responses</button></div>
+            <div class="code-block" id="api_response_examples">{"type":"state","id":"1","protocol":"MITSUBISHI_AC","custom":false,"power":"on","mode":"cool","setpoint":24,"current_temp":24,"fan":"auto","light":"on"}
+
+{"type":"state","id":"5","protocol":"CUSTOM","custom":true,"profile_name":"TV","custom_commands":[{"name":"power_on","encoding":"pronto"},{"name":"volume_up","encoding":"pronto"}],"encoding":"pronto","command_name":"power_on"}</div>
+          </div>
+
+          <div class="api-section">
+            <h4>Integration Notes</h4>
+            <ul>
+              <li>Each telnet command must be one JSON object per line, terminated with CRLF or LF.</li>
+              <li>On client connect or reconnect, current device states are pushed automatically.</li>
+              <li>State updates caused by DINplug or the web UI are also broadcast to telnet clients.</li>
+              <li>If a web password is enabled, third-party HTTP callers must authenticate the same way as the UI.</li>
+              <li>For a fuller written reference, the same content is documented in the project README.</li>
+            </ul>
+          </div>
+
+          <div class="api-section">
+            <h4>Try Read-Only Endpoints</h4>
+            <p>This runs safe GET requests directly from your browser so you can inspect live responses without leaving the device UI.</p>
+            <div class="api-tester-row">
+              <select id="api_try_select" class="api-select">
+                <option value="/api/status">GET /api/status</option>
+                <option value="/api/meta">GET /api/meta</option>
+                <option value="/api/config">GET /api/config</option>
+                <option value="/api/monitor?limit=20">GET /api/monitor?limit=20</option>
+                <option value="/api/wifi/scan">GET /api/wifi/scan</option>
+              </select>
+              <button class="btn-secondary btn-sm" type="button" id="api_try_btn">Run</button>
+              <button class="btn-outline btn-sm" type="button" id="api_try_copy_btn">Copy Result</button>
+            </div>
+            <div class="code-block api-output" id="api_try_output">Select an endpoint and click Run.</div>
+          </div>
+        </div>
+        <div class="status api-status" id="api_status">Use the copy buttons to grab ready-to-paste examples.</div>
       </div>
     </div>
 
@@ -375,9 +620,9 @@
       <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
       Home
     </a>
-    <a href="/hvacs">
+    <a href="/devices">
       <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
-      HVACs
+      Devices
     </a>
     <a href="/config">
       <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
@@ -395,12 +640,16 @@
     let lines = [];
     let enabled = false;
     let filters = { telnet: true, state: true, dinplug: true, ir: true };
+    let monitorPollTimer = null;
+    let statsPollTimer = null;
+    let activeTabName = 'monitor';
 
     // Tab switching
     function setActiveTab(tabName) {
       const tab = document.querySelector(`.tab[data-tab="${tabName}"]`);
       const content = byId('tab-' + tabName);
       if (!tab || !content) return;
+      activeTabName = tabName;
       document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
       document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
       tab.classList.add('active');
@@ -408,11 +657,76 @@
       if (location.hash !== '#' + tabName) {
         history.replaceState(null, '', '#' + tabName);
       }
+      syncMonitorPolling();
+      syncStatsPolling();
     }
 
     function loadTabFromLocation() {
       const tabName = (location.hash || '#monitor').slice(1);
       setActiveTab(tabName || 'monitor');
+    }
+
+    function formatBytes(bytes) {
+      const value = Number(bytes || 0);
+      if (value >= 1024 * 1024) return (value / (1024 * 1024)).toFixed(2) + ' MB';
+      if (value >= 1024) return (value / 1024).toFixed(1) + ' KB';
+      return value + ' B';
+    }
+
+    function formatUptime(ms) {
+      const totalSeconds = Math.floor(Number(ms || 0) / 1000);
+      const days = Math.floor(totalSeconds / 86400);
+      const hours = Math.floor((totalSeconds % 86400) / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+      const dayPart = days ? `${days}d ` : '';
+      return `${dayPart}${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    }
+
+    function wifiSignalInfo(networkMode, rssi) {
+      const mode = String(networkMode || '').toLowerCase();
+      const value = Number(rssi || 0);
+      if (!mode.includes('wifi')) return { label: 'Not on WiFi', cls: 'offline' };
+      if (!value) return { label: 'No RSSI', cls: 'offline' };
+      if (value >= -67) return { label: `Good (${value} dBm)`, cls: 'good' };
+      if (value >= -75) return { label: `OK (${value} dBm)`, cls: 'ok' };
+      return { label: `Bad (${value} dBm)`, cls: 'bad' };
+    }
+
+    function renderStats(d) {
+      byId('stat_uptime').textContent = formatUptime(d.uptime_ms);
+      byId('stat_heap_free').textContent = formatBytes(d.heap_free);
+      byId('stat_heap_min').textContent = formatBytes(d.heap_min_free);
+      byId('stat_heap_max').textContent = formatBytes(d.heap_max_alloc);
+      byId('stat_network').textContent = `${d.network_mode || '-'} | ${d.ip || '-'}`;
+      const signal = wifiSignalInfo(d.network_mode, d.wifi_rssi);
+      const isWifi = String(d.network_mode || '').toLowerCase().includes('wifi');
+      byId('stat_wifi_signal').innerHTML = `<span class="signal-badge ${signal.cls}">${signal.label}</span>`;
+      byId('stat_telnet').textContent = `${d.telnet_clients_active || 0} active`;
+      byId('stat_dinplug').textContent = `${d.dinplug_status || '-'} | bindings ${d.dinplug_bindings_used || 0}/${d.dinplug_bindings_total || 0}`;
+      byId('stat_counts').textContent = `${d.hvac_count || 0} devices, ${d.emitter_count || 0} emitters, ${d.temp_sensor_count || 0} sensors`;
+      byId('stats_status').textContent = 'Live stats updated.';
+    }
+
+    async function loadStats() {
+      const d = await J('/api/status');
+      renderStats(d);
+    }
+
+    function stopStatsPolling() {
+      if (statsPollTimer !== null) {
+        clearInterval(statsPollTimer);
+        statsPollTimer = null;
+      }
+    }
+
+    function syncStatsPolling() {
+      stopStatsPolling();
+      if (activeTabName !== 'stats' || document.hidden) return;
+      loadStats().catch(e => byId('stats_status').textContent = 'Stats load failed: ' + e);
+      statsPollTimer = setInterval(() => {
+        loadStats().catch(e => byId('stats_status').textContent = 'Stats refresh failed: ' + e);
+      }, 5000);
     }
 
     document.querySelectorAll('.tab').forEach(tab => {
@@ -438,8 +752,44 @@
       }
     }
 
+    async function copyApiBlock(targetId, button) {
+      const block = byId(targetId);
+      if (!block) return;
+      try {
+        await navigator.clipboard.writeText(block.textContent);
+        byId('api_status').textContent = 'Copied example to clipboard.';
+        if (button) {
+          const previous = button.textContent;
+          button.textContent = 'Copied';
+          setTimeout(() => { button.textContent = previous; }, 1200);
+        }
+      } catch (_e) {
+        byId('api_status').textContent = 'Clipboard copy failed.';
+      }
+    }
+
+    async function runApiTry() {
+      const endpoint = byId('api_try_select').value;
+      const output = byId('api_try_output');
+      output.textContent = 'Loading...';
+      byId('api_status').textContent = `Running ${endpoint}`;
+      try {
+        const response = await fetch(endpoint, { cache: 'no-store' });
+        const text = await response.text();
+        let formatted = text;
+        try {
+          formatted = JSON.stringify(JSON.parse(text), null, 2);
+        } catch (_e) {}
+        output.textContent = formatted;
+        byId('api_status').textContent = `${response.status} ${response.statusText} from ${endpoint}`;
+      } catch (err) {
+        output.textContent = `Request failed: ${err.message}`;
+        byId('api_status').textContent = `Request failed for ${endpoint}`;
+      }
+    }
+
     async function loadMonitor() {
-      const d = await J('/api/monitor');
+      const d = await J('/api/monitor?limit=60');
       enabled = !!d.enabled;
       filters = { ...filters, ...(d.filters || {}) };
       lines = d.lines || [];
@@ -452,6 +802,22 @@
       const log = byId('log_box');
       log.textContent = lines.join('\n');
       log.scrollTop = log.scrollHeight;
+    }
+
+    function stopMonitorPolling() {
+      if (monitorPollTimer !== null) {
+        clearInterval(monitorPollTimer);
+        monitorPollTimer = null;
+      }
+    }
+
+    function syncMonitorPolling() {
+      stopMonitorPolling();
+      if (activeTabName !== 'monitor' || document.hidden) return;
+      loadMonitor().catch(e => byId('mon_status').textContent = 'Load failed: ' + e);
+      monitorPollTimer = setInterval(() => {
+        loadMonitor().catch(e => byId('mon_status').textContent = 'Refresh failed: ' + e);
+      }, 3000);
     }
 
     async function saveMonitorFilters(nextEnabled = enabled) {
@@ -486,9 +852,16 @@
       copyText(codes.join('\n'));
     });
 
+    document.addEventListener('visibilitychange', () => {
+      syncMonitorPolling();
+      syncStatsPolling();
+    });
+    document.querySelectorAll('.api-copy-btn').forEach((button) => {
+      button.addEventListener('click', () => copyApiBlock(button.dataset.copyTarget, button));
+    });
+    byId('api_try_btn').addEventListener('click', () => runApiTry());
+    byId('api_try_copy_btn').addEventListener('click', () => copyApiBlock('api_try_output'));
     loadTabFromLocation();
-    loadMonitor().catch(e => byId('mon_status').textContent = 'Load failed: ' + e);
-    setInterval(() => loadMonitor().catch(e => byId('mon_status').textContent = 'Refresh failed: ' + e), 1000);
 
     // Firmware upload
     function uploadFile(fileInputId, buttonId, url, barId, statusId, label) {

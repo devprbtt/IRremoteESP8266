@@ -35,7 +35,7 @@ static const unsigned long kDinplugKeepAliveIntervalMs = 10000;
 static const unsigned long kDinplugRxTimeoutMs = 25000;
 static const unsigned long kTelnetStateBroadcastIntervalMs = 30000;
 static const unsigned long kHvacStatePersistDebounceMs = 1500;
-static const uint8_t kMaxDinplugButtons = 8;
+static const uint8_t kMaxDinplugBindingsTotal = 24;
 static const uint8_t kMaxDinplugKeypads = 8;
 static const uint8_t kMaxTempSensors = 8;
 static const uint16_t kMaxTelnetLineLength = 1024;
@@ -46,7 +46,7 @@ static const uint32_t kProntoDefaultFrequency = 38000;
 
 static const char *kConfigPath = "/config.json";
 static const char *kHvacStatePath = "/hvac_state.json";
-static const char *kApSsid = "IR-HVAC-Setup";
+static const char *kApSsid = "IR-Server-Setup";
 static const char *kDefaultHostname = "ir-server";
 static const char *kConfigPrefsNamespace = "hvaccfg";
 static const char *kConfigPrefsKey = "json";
@@ -86,6 +86,7 @@ struct DinplugButtonBinding {
 struct HvacConfig {
   String id;
   String protocol;
+  String profileName;
   int emitterIndex = -1;
   int model = -1;
   bool isCustom = false;
@@ -97,7 +98,7 @@ struct HvacConfig {
   uint8_t customCommandCount = 0;
   uint16_t dinKeypadIds[kMaxDinplugKeypads];
   uint8_t dinKeypadCount = 0;
-  DinplugButtonBinding dinButtons[kMaxDinplugButtons];
+  uint8_t dinButtonStart = 0;
   uint8_t dinButtonCount = 0;
   String currentTempSource = "setpoint";  // "setpoint" or "sensor"
   uint8_t tempSensorIndex = 0;            // Index on DS18B20 one-wire bus.
@@ -197,6 +198,8 @@ String serialConsoleBuffer;
 String telnetMonitorLog[kMonitorLogCapacity];
 uint16_t telnetMonitorLogStart = 0;
 uint16_t telnetMonitorLogCount = 0;
+DinplugButtonBinding dinplugBindingPool[kMaxDinplugBindingsTotal];
+uint8_t dinplugBindingCount = 0;
 OneWire *tempOneWire = nullptr;
 DallasTemperature *tempBus = nullptr;
 uint8_t tempSensorCount = 0;
@@ -278,6 +281,11 @@ String buildProntoFromCapture(const decode_results &capture, uint32_t frequency)
 String buildRawHexFromCapture(const decode_results &capture);
 String truncateForLog(const String &line, size_t maxLen = 900);
 bool startEthernet();
+const DinplugButtonBinding *getDinplugBinding(const HvacConfig &h, uint8_t idx);
+DinplugButtonBinding *getDinplugBinding(HvacConfig &h, uint8_t idx);
+void clearDinplugBindingPool();
+bool setHvacDinplugBindings(uint8_t hvacIndex, const DinplugButtonBinding *bindings, uint8_t count);
+void compactDinplugBindingPool();
 bool networkReady();
 String networkModeString();
 IPAddress networkLocalIp();
@@ -361,6 +369,71 @@ bool monitorCategoryEnabled(const String &categoryIn) {
   if (category == "dinplug") return monitorLogDinplugEnabled;
   if (category == "ir") return monitorLogIrEnabled;
   return true;
+}
+
+const DinplugButtonBinding *getDinplugBinding(const HvacConfig &h, uint8_t idx) {
+  if (idx >= h.dinButtonCount) return nullptr;
+  const uint16_t poolIdx = static_cast<uint16_t>(h.dinButtonStart) + idx;
+  if (poolIdx >= dinplugBindingCount) return nullptr;
+  return &dinplugBindingPool[poolIdx];
+}
+
+DinplugButtonBinding *getDinplugBinding(HvacConfig &h, uint8_t idx) {
+  return const_cast<DinplugButtonBinding *>(getDinplugBinding(static_cast<const HvacConfig &>(h), idx));
+}
+
+void clearDinplugBindingPool() {
+  dinplugBindingCount = 0;
+  for (uint8_t i = 0; i < config.hvacCount; i++) {
+    config.hvacs[i].dinButtonStart = 0;
+    config.hvacs[i].dinButtonCount = 0;
+  }
+}
+
+bool setHvacDinplugBindings(uint8_t hvacIndex, const DinplugButtonBinding *bindings, uint8_t count) {
+  if (hvacIndex >= config.hvacCount) return false;
+  if (count > kMaxDinplugBindingsTotal) return false;
+
+  DinplugButtonBinding nextPool[kMaxDinplugBindingsTotal];
+  uint8_t nextCount = 0;
+
+  for (uint8_t i = 0; i < config.hvacCount; i++) {
+    HvacConfig &h = config.hvacs[i];
+    const uint8_t oldStart = h.dinButtonStart;
+    const uint8_t oldCount = h.dinButtonCount;
+    h.dinButtonStart = nextCount;
+    if (i == hvacIndex) {
+      if ((nextCount + count) > kMaxDinplugBindingsTotal) return false;
+      for (uint8_t j = 0; j < count; j++) nextPool[nextCount + j] = bindings[j];
+      h.dinButtonCount = count;
+      nextCount += count;
+      continue;
+    }
+    if ((nextCount + oldCount) > kMaxDinplugBindingsTotal) return false;
+    for (uint8_t j = 0; j < oldCount; j++) nextPool[nextCount + j] = dinplugBindingPool[oldStart + j];
+    h.dinButtonCount = oldCount;
+    nextCount += oldCount;
+  }
+
+  for (uint8_t i = 0; i < nextCount; i++) dinplugBindingPool[i] = nextPool[i];
+  dinplugBindingCount = nextCount;
+  return true;
+}
+
+void compactDinplugBindingPool() {
+  DinplugButtonBinding nextPool[kMaxDinplugBindingsTotal];
+  uint8_t nextCount = 0;
+  for (uint8_t i = 0; i < config.hvacCount; i++) {
+    HvacConfig &h = config.hvacs[i];
+    const uint8_t oldStart = h.dinButtonStart;
+    const uint8_t oldCount = h.dinButtonCount;
+    h.dinButtonStart = nextCount;
+    for (uint8_t j = 0; j < oldCount && nextCount < kMaxDinplugBindingsTotal; j++) {
+      nextPool[nextCount++] = dinplugBindingPool[oldStart + j];
+    }
+  }
+  for (uint8_t i = 0; i < nextCount; i++) dinplugBindingPool[i] = nextPool[i];
+  dinplugBindingCount = nextCount;
 }
 
 String dinplugConnectionStatus() {
@@ -867,6 +940,7 @@ String configToJsonString() {
     JsonObject o = hv.add<JsonObject>();
     o["id"] = h.id;
     o["protocol"] = h.protocol;
+    o["profile_name"] = h.profileName;
     o["emitter"] = h.emitterIndex;
     o["model"] = h.model;
     o["current_temp_source"] = h.currentTempSource;
@@ -894,20 +968,22 @@ String configToJsonString() {
     for (uint8_t k = 0; k < h.dinKeypadCount; k++) keypads.add(h.dinKeypadIds[k]);
     JsonArray btns = dinplug["buttons"].to<JsonArray>();
     for (uint8_t b = 0; b < h.dinButtonCount; b++) {
+      const DinplugButtonBinding *binding = getDinplugBinding(h, b);
+      if (!binding) continue;
       JsonObject bo = btns.add<JsonObject>();
-      bo["keypad_id"] = h.dinButtons[b].keypadId;
-      bo["id"] = h.dinButtons[b].buttonId;
-      bo["press_action"] = h.dinButtons[b].pressAction;
-      bo["press_value"] = h.dinButtons[b].pressValue;
-      bo["press_mode_override"] = dinplugModeOverrideToString(h.dinButtons[b].pressModeOverride);
-      bo["press_light_mode"] = normalizeDinplugLightMode(h.dinButtons[b].pressLightMode);
-      bo["hold_action"] = h.dinButtons[b].holdAction;
-      bo["hold_value"] = h.dinButtons[b].holdValue;
-      bo["hold_mode_override"] = dinplugModeOverrideToString(h.dinButtons[b].holdModeOverride);
-      bo["hold_light_mode"] = normalizeDinplugLightMode(h.dinButtons[b].holdLightMode);
-      bo["toggle_power_mode"] = h.dinButtons[b].togglePowerMode;
-      bo["led_follow_mode"] = h.dinButtons[b].ledFollowMode;
-      bo["led_follow_power"] = (h.dinButtons[b].ledFollowMode != 0);
+      bo["keypad_id"] = binding->keypadId;
+      bo["id"] = binding->buttonId;
+      bo["press_action"] = binding->pressAction;
+      bo["press_value"] = binding->pressValue;
+      bo["press_mode_override"] = dinplugModeOverrideToString(binding->pressModeOverride);
+      bo["press_light_mode"] = normalizeDinplugLightMode(binding->pressLightMode);
+      bo["hold_action"] = binding->holdAction;
+      bo["hold_value"] = binding->holdValue;
+      bo["hold_mode_override"] = dinplugModeOverrideToString(binding->holdModeOverride);
+      bo["hold_light_mode"] = normalizeDinplugLightMode(binding->holdLightMode);
+      bo["toggle_power_mode"] = binding->togglePowerMode;
+      bo["led_follow_mode"] = binding->ledFollowMode;
+      bo["led_follow_power"] = (binding->ledFollowMode != 0);
     }
   }
 
@@ -943,6 +1019,7 @@ void clearConfig() {
   config.web.password = "";
   config.dinplug.gatewayHost = "";
   config.dinplug.autoConnect = false;
+  dinplugBindingCount = 0;
   config.tempSensors.enabled = false;
   config.tempSensors.gpio = 4;
   config.tempSensors.readIntervalSec = 10;
@@ -962,6 +1039,7 @@ void clearConfig() {
     HvacConfig &h = config.hvacs[i];
     h.id = "";
     h.protocol = "";
+    h.profileName = "";
     h.emitterIndex = -1;
     h.model = -1;
     h.isCustom = false;
@@ -980,6 +1058,7 @@ void clearConfig() {
     h.customCommandCount = 0;
     h.dinKeypadCount = 0;
     for (uint8_t k = 0; k < kMaxDinplugKeypads; k++) h.dinKeypadIds[k] = 0;
+    h.dinButtonStart = 0;
     h.dinButtonCount = 0;
     h.currentTempSource = "setpoint";
     h.tempSensorIndex = 0;
@@ -1074,6 +1153,7 @@ bool loadConfigFromJson(const String &json, bool printErrors) {
       HvacConfig &h = config.hvacs[config.hvacCount++];
       h.id = o["id"] | "";
       h.protocol = o["protocol"] | "";
+      h.profileName = o["profile_name"] | "";
       h.emitterIndex = o["emitter"] | -1;
       h.model = o["model"] | -1;
       h.currentTempSource = o["current_temp_source"] | "setpoint";
@@ -1141,9 +1221,11 @@ bool loadConfigFromJson(const String &json, bool printErrors) {
         }
         JsonArray btns = dinplug["buttons"];
         if (!btns.isNull()) {
+          h.dinButtonStart = dinplugBindingCount;
           for (JsonObject bo : btns) {
-            if (h.dinButtonCount >= kMaxDinplugButtons) break;
-            DinplugButtonBinding &b = h.dinButtons[h.dinButtonCount++];
+            if (dinplugBindingCount >= kMaxDinplugBindingsTotal) break;
+            DinplugButtonBinding &b = dinplugBindingPool[dinplugBindingCount++];
+            h.dinButtonCount++;
             b.keypadId = bo["keypad_id"] | 0;
             b.buttonId = bo["id"] | 0;
             b.pressAction = bo["press_action"] | "none";
@@ -1811,20 +1893,22 @@ String dinButtonsJson(const HvacConfig &h) {
   DynamicJsonDocument doc(512);
   JsonArray arr = doc.to<JsonArray>();
   for (uint8_t i = 0; i < h.dinButtonCount; i++) {
+    const DinplugButtonBinding *binding = getDinplugBinding(h, i);
+    if (!binding) continue;
     JsonObject o = arr.add<JsonObject>();
-    o["keypad_id"] = h.dinButtons[i].keypadId;
-    o["id"] = h.dinButtons[i].buttonId;
-    o["press_action"] = h.dinButtons[i].pressAction;
-    o["press_value"] = h.dinButtons[i].pressValue;
-    o["press_mode_override"] = dinplugModeOverrideToString(h.dinButtons[i].pressModeOverride);
-    o["press_light_mode"] = normalizeDinplugLightMode(h.dinButtons[i].pressLightMode);
-    o["hold_action"] = h.dinButtons[i].holdAction;
-    o["hold_value"] = h.dinButtons[i].holdValue;
-    o["hold_mode_override"] = dinplugModeOverrideToString(h.dinButtons[i].holdModeOverride);
-    o["hold_light_mode"] = normalizeDinplugLightMode(h.dinButtons[i].holdLightMode);
-    o["toggle_power_mode"] = h.dinButtons[i].togglePowerMode;
-    o["led_follow_mode"] = h.dinButtons[i].ledFollowMode;
-    o["led_follow_power"] = (h.dinButtons[i].ledFollowMode != 0);
+    o["keypad_id"] = binding->keypadId;
+    o["id"] = binding->buttonId;
+    o["press_action"] = binding->pressAction;
+    o["press_value"] = binding->pressValue;
+    o["press_mode_override"] = dinplugModeOverrideToString(binding->pressModeOverride);
+    o["press_light_mode"] = normalizeDinplugLightMode(binding->pressLightMode);
+    o["hold_action"] = binding->holdAction;
+    o["hold_value"] = binding->holdValue;
+    o["hold_mode_override"] = dinplugModeOverrideToString(binding->holdModeOverride);
+    o["hold_light_mode"] = normalizeDinplugLightMode(binding->holdLightMode);
+    o["toggle_power_mode"] = binding->togglePowerMode;
+    o["led_follow_mode"] = binding->ledFollowMode;
+    o["led_follow_power"] = (binding->ledFollowMode != 0);
   }
   String out;
   serializeJson(doc, out);
@@ -1950,7 +2034,7 @@ String pageHeader(const String &title) {
   html += ".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;}";
   html += ".pill{display:inline-block;background:#1e293b;color:#e2e8f0;padding:2px 8px;border-radius:999px;font-size:12px;margin-left:6px;}";
   html += "</style></head><body><div class='wrap'>";
-  html += "<nav><a href='/'>Home</a><a href='/config'>Config</a><a href='/emitters'>Emitters</a><a href='/hvacs'>HVACs</a><a href='/hvacs/test'>Test HVAC</a><a href='/dinplug'>DINplug</a><a href='/system#monitor'>Monitor</a><a href='/system#firmware'>Firmware</a><a href='/system#backup'>Upload</a><a href='/config/download'>Download</a></nav>";
+  html += "<nav><a href='/'>Home</a><a href='/config'>Config</a><a href='/emitters'>Emitters</a><a href='/devices'>Devices</a><a href='/devices/test'>Test Device</a><a href='/dinplug'>DINplug</a><a href='/system#monitor'>Monitor</a><a href='/system#firmware'>Firmware</a><a href='/system#backup'>Upload</a><a href='/config/download'>Download</a></nav>";
   return html;
 }
 
@@ -1969,8 +2053,8 @@ bool streamSpiffsFile(const char *path, const char *contentType) {
 
 void handleHome() {
   if (!checkAuth()) { requestAuth(); return; }
-  String html = pageHeader("IR HVAC Telnet");
-  html += "<div class='card'><h2>IR HVAC Telnet Server</h2>";
+  String html = pageHeader("IR Server Telnet");
+  html += "<div class='card'><h2>IR Server Telnet</h2>";
   html += "<p>Telnet port: <strong>" + String(config.telnetPort) + "</strong></p>";
   html += "<p>Network mode: <strong>" + networkModeString() + "</strong></p>";
   html += "<p>IP: <strong>" + networkLocalIp().toString() + "</strong></p>";
@@ -1982,7 +2066,7 @@ void handleHome() {
     html += "<p>IR RX GPIO/mode: <strong>" + String(config.irReceiver.gpio) + " / " +
             htmlEscape(normalizeIrReceiverMode(config.irReceiver.mode)) + "</strong></p>";
   }
-  html += "<p>HVACs: <strong>" + String(config.hvacCount) + "</strong></p></div>";
+  html += "<p>Devices: <strong>" + String(config.hvacCount) + "</strong></p></div>";
   html += "<div class='card'><h3>Telnet Connections</h3>";
   uint8_t activeTelnet = activeTelnetClientCount();
   html += "<p>Active clients: <strong>" + String(activeTelnet) + "</strong></p>";
@@ -2304,7 +2388,7 @@ void handleEmittersAdd() {
   rebuildEmitters();
   Serial.print("web: emitters added ");
   Serial.println(added);
-  web.sendHeader("Location", "/hvacs?tab=emitters");
+  web.sendHeader("Location", "/devices?tab=emitters");
   web.send(302, "text/plain", "");
 }
 
@@ -2323,29 +2407,29 @@ void handleEmittersDelete() {
   rebuildEmitters();
   Serial.print("web: emitter deleted index ");
   Serial.println(idx);
-  web.sendHeader("Location", "/hvacs?tab=emitters");
+  web.sendHeader("Location", "/devices?tab=emitters");
   web.send(302, "text/plain", "");
 }
 
 void handleHvacsPage() {
   if (!checkAuth()) { requestAuth(); return; }
-  String html = pageHeader("HVACs");
-  html += "<div class='card'><h2>HVACs</h2>";
+  String html = pageHeader("Devices");
+  html += "<div class='card'><h2>Devices</h2>";
   html += "<table><tr><th>#</th><th>ID</th><th>Protocol</th><th>Emitter</th><th>Custom Commands</th><th>Action</th></tr>";
   for (uint8_t i = 0; i < config.hvacCount; i++) {
     const HvacConfig &h = config.hvacs[i];
     html += "<tr><td>" + String(i) + "</td><td>" + htmlEscape(h.id) + "</td><td>" + htmlEscape(h.protocol) + "</td>";
     html += "<td>" + String(h.emitterIndex) + "</td>";
     html += "<td>" + htmlEscape(customCommandNamesSummary(h)) + "</td>";
-    html += "<td><a href='/hvacs/delete?index=" + String(i) + "'>Delete</a></td></tr>";
+    html += "<td><a href='/devices/delete?index=" + String(i) + "'>Delete</a></td></tr>";
   }
   html += "</table>";
 
   if (config.emitterCount == 0) {
-    html += "<p><strong>Add at least one emitter before registering HVACs.</strong></p>";
+    html += "<p><strong>Add at least one emitter before registering devices.</strong></p>";
   } else {
     html += "<h3>Add HVAC</h3>";
-    html += "<form method='POST' action='/hvacs/add'>";
+    html += "<form method='POST' action='/devices/add'>";
     html += "<label>Protocol</label><select name='protocol' id='addProtocol'>" + protocolOptionsHtml("") + "</select>";
     html += "<label>Emitter</label><select name='emitter'>" + emitterOptionsHtml(0) + "</select>";
     html += "<label>Model (optional)</label><input name='model' value='-1'>";
@@ -2377,7 +2461,7 @@ void handleHvacsPage() {
     }
     if (hasCustomSource && config.hvacCount < kMaxHvacs) {
       html += "<h3>Clone Custom HVAC</h3>";
-      html += "<form method='POST' action='/hvacs/clone'>";
+      html += "<form method='POST' action='/devices/clone'>";
       html += "<label>Source Custom HVAC</label><select name='source_index'>";
       for (uint8_t i = 0; i < config.hvacCount; i++) {
         const HvacConfig &src = config.hvacs[i];
@@ -2392,7 +2476,7 @@ void handleHvacsPage() {
   }
   if (config.hvacCount > 0 && config.emitterCount > 0) {
     html += "<h3>Edit HVAC</h3>";
-    html += "<form method='POST' action='/hvacs/update' id='editHvacForm'>";
+    html += "<form method='POST' action='/devices/update' id='editHvacForm'>";
     html += "<label>HVAC</label><select name='index' id='editHvacIndex'>";
     for (uint8_t i = 0; i < config.hvacCount; i++) {
       const HvacConfig &h = config.hvacs[i];
@@ -2415,7 +2499,7 @@ void handleHvacsPage() {
     html += "<label>DINplug Keypad IDs (comma-separated)</label><input name='din_keypad_ids' id='dinKeypads' value=''>";
     html += "<h4>Keypad Button Actions</h4>";
     html += "<table class='din-actions'><tr><th>#</th><th>Keypad ID</th><th>Button ID</th><th>Press Action</th><th>Press Value</th><th>Hold Action</th><th>Hold Value</th><th>Toggle Power Mode</th><th>LED follows HVAC power</th></tr>";
-    for (uint8_t b = 0; b < kMaxDinplugButtons; b++) {
+    for (uint8_t b = 0; b < kMaxDinplugBindingsTotal; b++) {
       html += "<tr data-btn-row='" + String(b) + "'>";
       html += "<td>" + String(b + 1) + "</td>";
       html += "<td><input class='din-id' name='btn" + String(b) + "_keypad_id' type='number' min='0' value='0'></td>";
@@ -2565,6 +2649,8 @@ void handleHvacsAdd() {
   h.id = id;
   h.protocol = web.arg("protocol");
   if (!h.protocol.length()) h.protocol = "CUSTOM";
+  h.profileName = web.arg("profile_name");
+  h.profileName.trim();
   if (h.protocol != "CUSTOM") {
     decode_type_t proto = strToDecodeType(h.protocol.c_str());
     if (!IRac::isProtocolSupported(proto)) {
@@ -2592,7 +2678,7 @@ void handleHvacsAdd() {
   saveConfig();
   Serial.print("web: hvac added id=");
   Serial.println(id);
-  web.sendHeader("Location", "/hvacs");
+  web.sendHeader("Location", "/devices");
   web.send(302, "text/plain", "");
 }
 
@@ -2637,6 +2723,7 @@ void handleHvacsClone() {
   dst.currentTempSource = "setpoint";
   dst.tempSensorIndex = 0;
   dst.dinKeypadCount = 0;
+  dst.dinButtonStart = 0;
   dst.dinButtonCount = 0;
 
   initHvacRuntimeStates();
@@ -2645,7 +2732,7 @@ void handleHvacsClone() {
   Serial.print(srcIdx);
   Serial.print(" to id=");
   Serial.println(id);
-  web.sendHeader("Location", "/hvacs");
+  web.sendHeader("Location", "/devices");
   web.send(302, "text/plain", "");
 }
 
@@ -2680,6 +2767,8 @@ void handleHvacsUpdate() {
   int model = web.arg("model").toInt();
   HvacConfig &h = config.hvacs[idx];
   h.protocol = protocol;
+  h.profileName = web.arg("profile_name");
+  h.profileName.trim();
   h.emitterIndex = emitterIndex;
   h.model = model;
   h.currentTempSource = web.arg("current_temp_source");
@@ -2698,13 +2787,14 @@ void handleHvacsUpdate() {
   String keypadCsv = web.arg("din_keypad_ids");
   if (keypadCsv.length() == 0) keypadCsv = web.arg("din_keypad_id");
   parseDinKeypadsCsv(keypadCsv, h);
-  h.dinButtonCount = 0;
-  for (uint8_t i = 0; i < kMaxDinplugButtons; i++) {
+  DinplugButtonBinding nextBindings[kMaxDinplugBindingsTotal];
+  uint8_t nextBindingCount = 0;
+  for (uint8_t i = 0; i < kMaxDinplugBindingsTotal; i++) {
     String base = "btn" + String(i) + "_";
     uint16_t keypadId = web.arg(base + "keypad_id").toInt();
     uint16_t btnId = web.arg(base + "id").toInt();
     if (btnId == 0) continue;
-    DinplugButtonBinding &b = h.dinButtons[h.dinButtonCount++];
+    DinplugButtonBinding &b = nextBindings[nextBindingCount++];
     b.keypadId = keypadId;
     b.buttonId = btnId;
     b.pressAction = web.arg(base + "press_action");
@@ -2737,13 +2827,17 @@ void handleHvacsUpdate() {
       b.holdModeOverride = kDinplugModeOverrideKeep;
       b.togglePowerMode = "auto";
     }
-    if (h.dinButtonCount >= kMaxDinplugButtons) break;
+    if (nextBindingCount >= kMaxDinplugBindingsTotal) break;
+  }
+  if (!setHvacDinplugBindings(static_cast<uint8_t>(idx), nextBindings, nextBindingCount)) {
+    web.send(400, "text/plain", "Too many DINplug bindings in use");
+    return;
   }
   resetHvacRuntimeState(static_cast<uint8_t>(idx));
   saveConfig();
   Serial.print("web: hvac updated index ");
   Serial.println(idx);
-  web.sendHeader("Location", "/hvacs");
+  web.sendHeader("Location", "/devices");
   web.send(302, "text/plain", "");
 }
 
@@ -2758,11 +2852,12 @@ void handleHvacsDelete() {
     config.hvacs[i] = config.hvacs[i + 1];
   }
   config.hvacCount--;
+  compactDinplugBindingPool();
   initHvacRuntimeStates();
   saveConfig();
   Serial.print("web: hvac deleted index ");
   Serial.println(idx);
-  web.sendHeader("Location", "/hvacs");
+  web.sendHeader("Location", "/devices");
   web.send(302, "text/plain", "");
 }
 
@@ -2771,7 +2866,7 @@ void handleHvacTestPage() {
   String html = pageHeader("HVAC Test");
   html += "<div class='card'><h2>Test HVAC</h2>";
   if (config.hvacCount == 0) {
-    html += "<p>No HVACs registered.</p>";
+    html += "<p>No devices registered.</p>";
   } else {
     html += "<form id='testForm'>";
     html += "<div class='grid'>";
@@ -2837,7 +2932,7 @@ void handleHvacTestPage() {
   html += "form.addEventListener('submit',async(e)=>{e.preventDefault();response.textContent='Sending...';";
   html += "if(customWrap&&customWrap.style.display!=='none'&&customCmdSelect&&customCmdSelect.value===''){response.textContent='Select a custom command first.';return;}";
   html += "const fd=new FormData(form);const params=new URLSearchParams(fd);";
-  html += "const res=await fetch('/hvacs/test',{method:'POST',body:params});";
+  html += "const res=await fetch('/devices/test',{method:'POST',body:params});";
   html += "const data=await res.json();response.textContent=JSON.stringify(data,null,2);});}";
   html += "const rawForm=document.getElementById('rawForm');const rawResponse=document.getElementById('rawResponse');";
   html += "if(rawForm){rawForm.addEventListener('submit',async(e)=>{e.preventDefault();rawResponse.textContent='Sending...';";
@@ -3053,12 +3148,18 @@ void handleApiStatus() {
   doc["network_mode"] = networkModeString();
   doc["ip"] = networkLocalIp().toString();
   doc["hostname"] = config.hostname.length() ? config.hostname : kDefaultHostname;
+  doc["uptime_ms"] = millis();
   doc["telnet_port"] = config.telnetPort;
   doc["dinplug_status"] = dinplugConnectionStatus();
   doc["emitter_count"] = config.emitterCount;
   doc["hvac_count"] = config.hvacCount;
+  doc["dinplug_bindings_used"] = dinplugBindingCount;
+  doc["dinplug_bindings_total"] = kMaxDinplugBindingsTotal;
   doc["ir_receiver_enabled"] = config.irReceiver.enabled;
   doc["ir_receiver_gpio"] = config.irReceiver.gpio;
+  doc["heap_free"] = ESP.getFreeHeap();
+  doc["heap_min_free"] = ESP.getMinFreeHeap();
+  doc["heap_max_alloc"] = ESP.getMaxAllocHeap();
   doc["telnet_clients_active"] = activeTelnetClientCount();
   JsonArray telnetClientsJson = doc["telnet_clients"].to<JsonArray>();
   for (uint8_t i = 0; i < kMaxTelnetClients; i++) {
@@ -3082,6 +3183,7 @@ void handleApiStatus() {
     if (tempSensorValid[i]) s["current_temp"] = tempSensorReadings[i];
   }
   doc["ethernet_enabled"] = config.eth.enabled;
+  doc["wifi_rssi"] = WiFi.isConnected() ? WiFi.RSSI() : 0;
   String out;
   serializeJson(doc, out);
   web.send(200, "application/json", out);
@@ -3119,7 +3221,10 @@ void handleApiMeta() {
   for (const char *mode : lightModesList) lightModes.add(mode);
 
   doc["max_custom_commands"] = kMaxCustomCommands;
-  doc["max_dinplug_buttons"] = kMaxDinplugButtons;
+  doc["max_dinplug_buttons"] = kMaxDinplugBindingsTotal;
+  doc["max_dinplug_bindings_total"] = kMaxDinplugBindingsTotal;
+  doc["dinplug_bindings_used"] = dinplugBindingCount;
+  doc["dinplug_bindings_available"] = kMaxDinplugBindingsTotal - dinplugBindingCount;
   doc["max_temp_sensors"] = kMaxTempSensors;
   doc["max_emitters"] = kMaxEmitters;
   doc["max_hvacs"] = kMaxHvacs;
@@ -3212,9 +3317,10 @@ bool processCommand(JsonDocument &doc, JsonDocument &resp, int8_t sourceTelnetSl
     for (uint8_t i = 0; i < config.hvacCount; i++) {
       JsonObject o = hv.add<JsonObject>();
       const bool isCustom = config.hvacs[i].isCustom || config.hvacs[i].protocol == "CUSTOM";
-      o["id"] = config.hvacs[i].id;
-      o["protocol"] = isCustom ? "CUSTOM" : config.hvacs[i].protocol;
-      o["emitter"] = config.hvacs[i].emitterIndex;
+    o["id"] = config.hvacs[i].id;
+    o["protocol"] = isCustom ? "CUSTOM" : config.hvacs[i].protocol;
+    o["profile_name"] = config.hvacs[i].profileName;
+    o["emitter"] = config.hvacs[i].emitterIndex;
       o["model"] = config.hvacs[i].model;
       o["custom"] = isCustom;
       if (isCustom) {
@@ -3551,6 +3657,15 @@ void handleMonitorPage() {
 
 void handleApiMonitor() {
   if (!checkAuth()) { requestAuth(); return; }
+  uint16_t limit = kMonitorLogCapacity;
+  if (web.hasArg("limit")) {
+    long requested = web.arg("limit").toInt();
+    if (requested > 0) {
+      limit = (uint16_t)requested;
+      if (limit > 80) limit = 80;
+    }
+  }
+  if (limit > telnetMonitorLogCount) limit = telnetMonitorLogCount;
   JsonDocument doc;
   doc["enabled"] = telnetMonitorEnabled;
   JsonObject filters = doc["filters"].to<JsonObject>();
@@ -3559,7 +3674,8 @@ void handleApiMonitor() {
   filters["dinplug"] = monitorLogDinplugEnabled;
   filters["ir"] = monitorLogIrEnabled;
   JsonArray lines = doc["lines"].to<JsonArray>();
-  for (uint16_t i = 0; i < telnetMonitorLogCount; i++) {
+  uint16_t startOffset = telnetMonitorLogCount - limit;
+  for (uint16_t i = startOffset; i < telnetMonitorLogCount; i++) {
     uint16_t idx = (telnetMonitorLogStart + i) % kMonitorLogCapacity;
     lines.add(telnetMonitorLog[idx]);
   }
@@ -3726,19 +3842,19 @@ void setupWeb() {
   });
   web.on("/emitters/add", HTTP_POST, handleEmittersAdd);
   web.on("/emitters/delete", HTTP_GET, handleEmittersDelete);
-  web.on("/hvacs", HTTP_GET, []() {
+  web.on("/devices", HTTP_GET, []() {
     if (!checkAuth()) { requestAuth(); return; }
     if (!streamSpiffsFile("/hvacs.html", "text/html; charset=utf-8")) handleHvacsPage();
   });
-  web.on("/hvacs/add", HTTP_POST, handleHvacsAdd);
-  web.on("/hvacs/clone", HTTP_POST, handleHvacsClone);
-  web.on("/hvacs/test", HTTP_GET, []() {
+  web.on("/devices/add", HTTP_POST, handleHvacsAdd);
+  web.on("/devices/clone", HTTP_POST, handleHvacsClone);
+  web.on("/devices/test", HTTP_GET, []() {
     if (!checkAuth()) { requestAuth(); return; }
     if (!streamSpiffsFile("/hvacs_test.html", "text/html; charset=utf-8")) handleHvacTestPage();
   });
-  web.on("/hvacs/test", HTTP_POST, handleHvacTest);
-  web.on("/hvacs/update", HTTP_POST, handleHvacsUpdate);
-  web.on("/hvacs/delete", HTTP_GET, handleHvacsDelete);
+  web.on("/devices/test", HTTP_POST, handleHvacTest);
+  web.on("/devices/update", HTTP_POST, handleHvacsUpdate);
+  web.on("/devices/delete", HTTP_GET, handleHvacsDelete);
   web.on("/dinplug", HTTP_GET, []() {
     if (!checkAuth()) { requestAuth(); return; }
     if (!streamSpiffsFile("/dinplug.html", "text/html; charset=utf-8")) handleDinplugPage();
@@ -3831,16 +3947,16 @@ void syncDinplugLedsForHvac(uint8_t hvacIndex) {
   const HvacConfig &h = config.hvacs[hvacIndex];
   const HvacRuntimeState &state = hvacStates[hvacIndex];
   for (uint8_t i = 0; i < h.dinButtonCount; i++) {
-    const DinplugButtonBinding &b = h.dinButtons[i];
-    if (b.ledFollowMode == 0 || b.buttonId == 0) continue;
-    const uint8_t ledState = (b.ledFollowMode == 1) ? (state.power ? 1 : 0) : (state.power ? 0 : 1);
-    if (b.keypadId != 0) {
-      setDinplugLed(b.keypadId, b.buttonId, ledState);
+    const DinplugButtonBinding *b = getDinplugBinding(h, i);
+    if (!b || b->ledFollowMode == 0 || b->buttonId == 0) continue;
+    const uint8_t ledState = (b->ledFollowMode == 1) ? (state.power ? 1 : 0) : (state.power ? 0 : 1);
+    if (b->keypadId != 0) {
+      setDinplugLed(b->keypadId, b->buttonId, ledState);
       continue;
     }
     for (uint8_t k = 0; k < h.dinKeypadCount; k++) {
       if (h.dinKeypadIds[k] == 0) continue;
-      setDinplugLed(h.dinKeypadIds[k], b.buttonId, ledState);
+      setDinplugLed(h.dinKeypadIds[k], b->buttonId, ledState);
     }
   }
 }
@@ -3880,10 +3996,10 @@ void handleDinplugButtonEvent(uint16_t keypadId, uint16_t buttonId, const String
     const HvacConfig &h = config.hvacs[i];
     if (!hvacHasDinKeypad(h, keypadId)) continue;
     for (uint8_t b = 0; b < h.dinButtonCount; b++) {
-      const DinplugButtonBinding &bind = h.dinButtons[b];
-      if (bind.buttonId != buttonId) continue;
-      if (bind.keypadId != 0 && bind.keypadId != keypadId) continue;
-      if (applyDinplugAction(i, bind, isHold)) {
+      const DinplugButtonBinding *bind = getDinplugBinding(h, b);
+      if (!bind || bind->buttonId != buttonId) continue;
+      if (bind->keypadId != 0 && bind->keypadId != keypadId) continue;
+      if (applyDinplugAction(i, *bind, isHold)) {
         Serial.print("dinplug: applied action to hvac ");
         Serial.println(h.id);
       }
@@ -4359,7 +4475,7 @@ void setup() {
   Serial.begin(115200);
   delay(200);
   Serial.println();
-  Serial.println("IR HVAC Telnet Server boot");
+  Serial.println("IR Server Telnet boot");
 
   if (!SPIFFS.begin(true)) {
     Serial.println("fs: SPIFFS mount failed");

@@ -1,39 +1,46 @@
-# HvacTelnetServer (ESP32)
+# IR Server Telnet (ESP32)
 
-ESP32 HVAC IR bridge with:
+ESP32 IR bridge with:
 - Telnet JSON API (one command per line, one JSON response).
-- Web UI for WiFi/Ethernet, emitters, HVACs, DINplug, monitor, and OTA.
+- Web UI for WiFi/Ethernet, emitters, devices, DINplug, monitor, API reference, and OTA.
 - Standard HVAC protocols (IRremoteESP8266 `IRac`) plus `CUSTOM` commands.
 - Optional IR receiver logging and IR learn flow for custom command capture.
 
 ## Quick start
 - Build with PlatformIO using `examples/HvacTelnetServer/platformio.ini`.
 - Flash your board (for WT32, use the matching ESP32 environment you already use).
-- On first boot (or if station connection fails), AP mode starts as `IR-HVAC-Setup`.
+- On first boot (or if station connection fails), AP mode starts as `IR-Server-Setup`.
 - Open `http://192.168.4.1/` and configure networking and emitters.
 
 ## Web UI
 - `/config`: WiFi, hostname, telnet port, optional web password, DS18B20, IR receiver, Ethernet (WT32 LAN8720).
 - `/emitters`: add/remove IR LED GPIO emitters.
-- `/hvacs`: add/edit HVAC entries, including `CUSTOM` command sets and DINplug button mappings.
-- `/hvacs/test`: send test commands for standard and custom HVAC entries.
+- `/devices`: add/edit device profiles, including HVAC entries, `CUSTOM` command sets, and DINplug button mappings.
+- `/devices/test`: send test commands for standard HVAC and custom device profiles.
 - `/raw/test` (from Test page): send ad-hoc raw code (`pronto`, `gc`, `racepoint`, `rawhex`).
 - `/dinplug`: DINplug gateway config + test.
-- `/system`: Monitor, firmware updates, and config backup/restore in one page.
+- `/system`: Monitor, live stats, API reference, firmware updates, and config backup/restore in one page.
 - `/config/download`: download current config JSON.
 
 ## Custom protocol workflow
-In **Add HVAC** (`/hvacs`):
+In **Add Device Profile** (`/devices`):
 1. Select protocol `CUSTOM`.
 2. Add one or more commands (name + encoding + code).
 3. Use **Learn** on a command row to capture from IR receiver.
-4. Click **Add HVAC** after your command list is ready.
+4. Add a profile name so the custom device is easy to identify in the list.
+5. Click **Add Device Profile** after your command list is ready.
 
 Notes:
 - Supported custom encodings: `pronto`, `gc`, `racepoint`, `rawhex`.
 - Learn flow supports cancel and has a 10s timeout.
-- Learned/custom commands are shown in the HVAC list and can be deleted/edited.
+- Learned/custom commands are shown in the device list and can be deleted/edited.
 - DINplug button actions can target custom commands via `custom:<name>`.
+
+Typical custom profile examples:
+- `TV`
+- `Projector`
+- `Receiver`
+- `Screen`
 
 ## IR receiver
 Configurable in `/config`:
@@ -67,12 +74,12 @@ List config summary:
 {"cmd":"list"}
 ```
 
-Get one HVAC state:
+Get one device state:
 ```json
 {"cmd":"get","id":"1"}
 ```
 
-Get all HVAC states:
+Get all device states:
 ```json
 {"cmd":"get_all"}
 ```
@@ -82,7 +89,7 @@ Send standard HVAC command:
 {"cmd":"send","id":"1","power":"on","mode":"cool","temp":24,"fan":"auto","light":"true"}
 ```
 
-Send custom HVAC command by registered command name:
+Send custom device command by registered command name:
 ```json
 {"cmd":"send","id":"5","command_name":"power_on"}
 ```
@@ -104,7 +111,7 @@ Example:
 {"type":"state","id":"1","protocol":"MITSUBISHI_AC","custom":false,"power":"on","mode":"cool","setpoint":24,"current_temp":24,"fan":"auto","light":"on"}
 ```
 
-Custom HVAC state response includes custom-focused fields:
+Custom device state response includes custom-focused fields:
 - `type`, `id`, `protocol: "CUSTOM"`, `custom: true`
 - `custom_commands` (name + encoding)
 - For `send`, response may also include `encoding` and `command_name`
@@ -120,6 +127,7 @@ Behavior notes:
 - `get_all` returns an array of state objects.
 - On telnet client connect/reconnect, current states are pushed automatically.
 - State changes from non-telnet sources (for example DINplug actions) are also broadcast to telnet clients.
+- `/system` now includes an API tab with these commands and examples for third-party integrations.
 
 ## IR learn API
 Used by the web UI and available for direct calls:
@@ -131,9 +139,13 @@ Used by the web UI and available for direct calls:
 - Supports IP or DNS hostname gateway.
 - Button actions support standard HVAC actions and `custom:<name>`.
 - LED follow modes are supported per button mapping row.
+- DINplug bindings use a shared global pool to keep ESP32 RAM usage bounded.
+- Current total DINplug binding capacity: `24` bindings across all device profiles combined.
+- Firmware/SPIFS updates do not wipe saved config by themselves; current settings remain unless you explicitly factory reset or erase flash.
 
 HVAC editor fields for DINplug:
 - `DINplug Keypad IDs (comma-separated)`: link one HVAC to one or more keypads.
+- `Add Binding`: add DINplug button mappings only where needed, up to the remaining global pool capacity shown in the UI.
 - `Keypad Button Actions` table:
   - `Keypad ID`: optional row filter (`0` means match any linked keypad).
   - `Button ID`: button/LED ID from DINplug.

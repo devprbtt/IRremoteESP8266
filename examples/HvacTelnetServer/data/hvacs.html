@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
   <meta name="theme-color" content="#0a0e14">
-  <title>HVACs - IR HVAC Telnet</title>
+  <title>Devices - IR Server Telnet</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; }
     :root {
@@ -232,7 +232,7 @@
     /* Command rows */
     .cmd-row {
       display: grid;
-      grid-template-columns: 1.2fr 1fr 2fr auto;
+      grid-template-columns: 1.2fr 1fr 2fr auto auto;
       gap: 8px;
       margin-bottom: 8px;
       align-items: start;
@@ -268,6 +268,52 @@
       color: var(--text-muted);
       font-size: 0.75rem;
     }
+    .overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(10, 14, 20, 0.82);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      z-index: 2000;
+    }
+    .overlay-card {
+      width: min(440px, 100%);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
+    }
+    .overlay-card h3 {
+      margin: 0 0 10px;
+      font-size: 1rem;
+    }
+    .overlay-card p {
+      margin: 0 0 12px;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+    }
+    .overlay-count {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 42px;
+      height: 42px;
+      padding: 0 12px;
+      border-radius: 999px;
+      background: var(--surface-elevated);
+      font-size: 1rem;
+      font-weight: 700;
+      margin-bottom: 12px;
+    }
+    .overlay-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 14px;
+    }
     pre {
       padding: 12px;
       background: var(--surface-elevated);
@@ -288,8 +334,8 @@
 <body>
   <div class="container">
     <header class="header">
-      <h1>HVACs and Emitters</h1>
-      <p>Manage IR hardware and HVAC definitions</p>
+      <h1>Devices and Emitters</h1>
+      <p>Manage IR hardware and device profiles</p>
     </header>
 
     <div class="tabs">
@@ -302,11 +348,11 @@
 
     <div id="tab-list" class="tab-content active">
       <div class="card">
-        <h3 class="card-title">Registered HVACs</h3>
+        <h3 class="card-title">Registered Device Profiles</h3>
         <div class="table-wrap">
           <table>
-            <thead><tr><th>#</th><th>ID</th><th>Protocol</th><th>Emitter</th><th>Commands</th><th>Action</th></tr></thead>
-            <tbody id="hvac_rows"><tr><td colspan="6">Loading...</td></tr></tbody>
+            <thead><tr><th>#</th><th>ID</th><th>Protocol</th><th>Profile</th><th>Emitter</th><th>Commands</th><th>Action</th></tr></thead>
+            <tbody id="hvac_rows"><tr><td colspan="7">Loading...</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -342,12 +388,15 @@
 
     <div id="tab-add" class="tab-content">
       <div class="card">
-        <h3 class="card-title">Add HVAC</h3>
-        <form method="POST" action="/hvacs/add" id="add_form">
+        <h3 class="card-title">Add Device Profile</h3>
+        <form method="POST" action="/devices/add" id="add_form">
           <div class="form-grid cols-3">
             <div class="field"><label>Protocol</label><select name="protocol" id="add_protocol"></select></div>
             <div class="field"><label>Emitter</label><select name="emitter" id="add_emitter"></select></div>
             <div class="field"><label>Model</label><input name="model" value="-1"></div>
+          </div>
+          <div class="form-grid cols-3" style="margin-top:12px;">
+            <div class="field"><label>Profile Name</label><input name="profile_name" id="add_profile_name" placeholder="Living Room AC, Bedroom Mini Split, TV"></div>
           </div>
           <div class="form-grid cols-3" style="margin-top:12px;">
             <div class="field"><label>Temp Source</label><select name="current_temp_source" id="add_temp_source"><option value="setpoint">setpoint</option><option value="sensor">sensor</option></select></div>
@@ -357,33 +406,36 @@
             <div class="subcard-title">Custom Commands</div>
             <div id="add_commands"></div>
           </div>
-          <button class="btn-primary" type="submit" style="margin-top:12px;">Add HVAC</button>
+          <button class="btn-primary" type="submit" style="margin-top:12px;">Add Device Profile</button>
         </form>
       </div>
       <div class="card" id="clone_card" style="display:none;">
-        <h3 class="card-title">Clone Custom HVAC</h3>
-        <form method="POST" action="/hvacs/clone">
+        <h3 class="card-title">Clone Custom Profile</h3>
+        <form method="POST" action="/devices/clone">
           <div class="form-grid">
             <div class="field"><label>Source</label><select name="source_index" id="clone_source"></select></div>
             <div class="field"><label>Emitter</label><select name="emitter" id="clone_emitter"></select></div>
           </div>
-          <button class="btn-secondary" type="submit" style="margin-top:12px;">Clone HVAC</button>
+          <button class="btn-secondary" type="submit" style="margin-top:12px;">Clone Profile</button>
         </form>
       </div>
     </div>
 
     <div id="tab-edit" class="tab-content">
       <div class="card" id="edit_card">
-        <h3 class="card-title">Edit HVAC</h3>
-        <form method="POST" action="/hvacs/update" id="edit_form">
+        <h3 class="card-title">Edit Device Profile</h3>
+        <form method="POST" action="/devices/update" id="edit_form">
           <div class="field" style="margin-bottom:12px;">
-            <label>Select HVAC</label>
+            <label>Select Device Profile</label>
             <select name="index" id="edit_index"></select>
           </div>
           <div class="form-grid cols-3">
             <div class="field"><label>Protocol</label><select name="protocol" id="edit_protocol"></select></div>
             <div class="field"><label>Emitter</label><select name="emitter" id="edit_emitter"></select></div>
             <div class="field"><label>Model</label><input name="model" id="edit_model" value="-1"></div>
+          </div>
+          <div class="form-grid cols-3" style="margin-top:12px;">
+            <div class="field"><label>Profile Name</label><input name="profile_name" id="edit_profile_name" placeholder="Living Room AC, Bedroom Mini Split, TV"></div>
           </div>
           <div class="form-grid cols-3" style="margin-top:12px;">
             <div class="field"><label>Temp Source</label><select name="current_temp_source" id="edit_temp_source"><option value="setpoint">setpoint</option><option value="sensor">sensor</option></select></div>
@@ -395,21 +447,25 @@
             <div id="edit_commands"></div>
           </div>
           <div class="subcard">
-            <div class="subcard-title">DINplug Button Bindings</div>
+            <div class="subcard-title" style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
+              <span>DINplug Button Bindings</span>
+              <button type="button" class="btn-sm btn-secondary" id="add_binding_btn">Add Binding</button>
+            </div>
+            <div class="status" id="binding_pool_status" style="margin-top:8px;">Loading binding limits...</div>
             <div id="button_rows"></div>
           </div>
-          <button class="btn-secondary" type="submit" style="margin-top:12px;">Update HVAC</button>
+          <button class="btn-secondary" type="submit" style="margin-top:12px;">Update Device Profile</button>
         </form>
       </div>
-      <div class="status" id="status_edit">Select an HVAC to edit</div>
+      <div class="status" id="status_edit">Select a device profile to edit</div>
     </div>
 
     <div id="tab-test" class="tab-content">
       <div class="card">
-        <h3 class="card-title">Test Registered HVAC</h3>
+        <h3 class="card-title">Test Registered Device Profile</h3>
         <form id="test_form">
           <div class="form-grid cols-3">
-            <div class="field"><label>HVAC</label><select name="id" id="test_hvac"></select></div>
+            <div class="field"><label>Device Profile</label><select name="id" id="test_hvac"></select></div>
             <div class="field"><label>Power</label><select name="power" id="test_power"><option value="on">on</option><option value="off">off</option></select></div>
             <div class="field"><label>Mode</label><select name="mode" id="test_mode"><option>auto</option><option>cool</option><option>heat</option><option>dry</option><option>fan</option></select></div>
             <div class="field"><label>Temp</label><input name="temp" id="test_temp" value="24"></div>
@@ -444,9 +500,9 @@
       <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
       Home
     </a>
-    <a href="/hvacs" class="active">
+    <a href="/devices" class="active">
       <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
-      HVACs
+      Devices
     </a>
     <a href="/config">
       <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
@@ -458,9 +514,22 @@
     </a>
   </nav>
 
+  <div id="learn_overlay" class="overlay" style="display:none;">
+    <div class="overlay-card">
+      <h3 id="learn_title">Learn IR Code</h3>
+      <div class="overlay-count" id="learn_count">3</div>
+      <p id="learn_message">Learning will start soon.</p>
+      <div class="status" id="learn_status">Prepare the remote.</div>
+      <div class="overlay-actions">
+        <button type="button" class="btn-sm btn-secondary" id="learn_cancel_btn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     const J = (u, o) => fetch(u, o).then(r => r.json());
     const byId = id => document.getElementById(id);
+    let persistedBindingCount = 0;
     const DINACTIONS = ["none","temp_up","temp_down","set_temp","power_on","power_off","toggle_power","mode_heat","mode_cool","mode_fan","mode_auto","mode_off","light_on","light_off","toggle_light"];
     const MODEOVERRIDES = ["keep","auto","cool","heat","dry","fan"];
     const LIGHTMODES = ["keep","on","off","toggle"];
@@ -468,6 +537,7 @@
     let cfg, meta, status;
     let activeTab = 'list';
     const commandEditorState = { add: 1, edit: 1 };
+    let activeLearnCancel = null;
 
     // Tab switching
     function setActiveTab(name) {
@@ -488,6 +558,9 @@
     function protocolOpts(sel) {
       return optHtml(meta.protocols || [], v => v, v => v, sel);
     }
+    function hvacProfileName(h) {
+      return String(h?.profile_name || '').trim();
+    }
     function sensorOpts(selected) {
       const sensors = status?.temp_sensors || [];
       const precision = Math.max(0, Math.min(2, Number(status?.temp_sensor_precision ?? 2)));
@@ -507,6 +580,7 @@
           <input name="${prefix}${i}_name" placeholder="name" value="${c.name || ''}">
           <select name="${prefix}${i}_encoding">${optHtml(['pronto','gc','racepoint','rawhex'], v => v, v => v, c.encoding || 'pronto')}</select>
           <textarea name="${prefix}${i}_code" placeholder="code">${c.code || ''}</textarea>
+          <button type="button" class="btn-sm btn-warning learn-btn">Learn</button>
           <button type="button" class="btn-sm btn-secondary" onclick="removeCommandRow(this,'${key}')">Delete</button>
         </div>`;
     }
@@ -552,46 +626,202 @@
         }
       }
     };
-    function buttonRows(items, isCustom) {
-      let html = '';
-      const actions = isCustom ? ['none', ...((items._customActions) || [])] : DINACTIONS;
-      for (let i = 0; i < (meta.max_dinplug_buttons || 8); i++) {
-        const b = items[i] || {};
-        html += `
-        <div class="bind-group subcard" style="margin-top: 0; margin-bottom: 12px; background: var(--surface-elevated);">
+    async function startIrLearn(encoding) {
+      const res = await fetch('/api/ir/learn/start', {
+        method: 'POST',
+        body: new URLSearchParams({ encoding: encoding || 'pronto' })
+      });
+      return res.json();
+    }
+    async function pollIrLearn(stopState) {
+      const deadline = Date.now() + 10000;
+      while (Date.now() < deadline) {
+        if (stopState.cancelled) return { error: 'cancelled' };
+        const res = await fetch('/api/ir/learn/poll');
+        const data = await res.json();
+        if (data?.ready && data?.code) return data;
+        if (data?.error) return data;
+        await new Promise(resolve => setTimeout(resolve, 250));
+      }
+      return { error: 'timeout' };
+    }
+    async function cancelIrLearn() {
+      try {
+        await fetch('/api/ir/learn/cancel', { method: 'POST' });
+      } catch (_err) {}
+    }
+    function showLearnOverlay() {
+      byId('learn_overlay').style.display = 'flex';
+      byId('learn_cancel_btn').onclick = () => {
+        if (activeLearnCancel) activeLearnCancel();
+      };
+    }
+    function hideLearnOverlay() {
+      byId('learn_overlay').style.display = 'none';
+      byId('learn_cancel_btn').onclick = null;
+      activeLearnCancel = null;
+    }
+    function setLearnOverlay(title, message, statusText, countText) {
+      byId('learn_title').textContent = title;
+      byId('learn_message').textContent = message;
+      byId('learn_status').textContent = statusText;
+      byId('learn_count').textContent = countText;
+    }
+    async function runLearnCountdown(stopState) {
+      for (let remaining = 3; remaining > 0; remaining--) {
+        if (stopState.cancelled) return false;
+        setLearnOverlay(
+          'Get Ready to Learn',
+          'Point the remote at the IR receiver. Learning starts automatically after the countdown.',
+          'The capture window will timeout after 10 seconds if no IR code is received.',
+          String(remaining)
+        );
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+      return !stopState.cancelled;
+    }
+    async function learnIntoRow(row) {
+      const encSel = row?.querySelector('select[name$="_encoding"]');
+      const codeBox = row?.querySelector('textarea[name$="_code"]');
+      if (!encSel || !codeBox) return;
+      const stopState = { cancelled: false };
+      activeLearnCancel = async () => {
+        stopState.cancelled = true;
+        await cancelIrLearn();
+        hideLearnOverlay();
+      };
+      showLearnOverlay();
+      const proceed = await runLearnCountdown(stopState);
+      if (!proceed) return;
+      setLearnOverlay(
+        'Learning IR Code',
+        'Point the remote at the IR receiver now and press the button you want to learn.',
+        'Waiting for IR code. This will timeout after 10 seconds.',
+        '10s'
+      );
+      const started = await startIrLearn(encSel.value);
+      if (!started?.ok) {
+        hideLearnOverlay();
+        alert('Learn unavailable. Enable IR receiver first.');
+        return;
+      }
+      const deadline = Date.now() + 10000;
+      const learned = await (async () => {
+        while (Date.now() < deadline) {
+          if (stopState.cancelled) return { error: 'cancelled' };
+          const secondsLeft = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+          setLearnOverlay(
+            'Learning IR Code',
+            'Point the remote at the IR receiver now and press the button you want to learn.',
+            'Waiting for IR code. This will timeout after 10 seconds.',
+            `${secondsLeft}s`
+          );
+          const res = await fetch('/api/ir/learn/poll');
+          const data = await res.json();
+          if (data?.ready && data?.code) return data;
+          if (data?.error) return data;
+          await new Promise(resolve => setTimeout(resolve, 250));
+        }
+        return { error: 'timeout' };
+      })();
+      hideLearnOverlay();
+      if (!learned || learned.error) {
+        await cancelIrLearn();
+        if (learned?.error !== 'cancelled') {
+          alert(learned?.error === 'timeout'
+            ? 'No IR code was learned within 10 seconds.'
+            : 'Learn failed: ' + (learned?.error || 'timeout'));
+        }
+        return;
+      }
+      const preview = String(learned.code || '');
+      if (confirm('Learned code:\n' + preview.substring(0, 1000) + (preview.length > 1000 ? '...' : '') + '\n\nUse this code?')) {
+        codeBox.value = learned.code || '';
+      }
+    }
+    document.addEventListener('click', evt => {
+      const btn = evt.target.closest('.learn-btn');
+      if (!btn) return;
+      const row = btn.closest('.cmd-row');
+      if (!row) return;
+      learnIntoRow(row).catch(err => alert('Learn failed: ' + err.message));
+    });
+    function bindingActions(isCustom, customActions = []) {
+      return isCustom ? ['none', ...customActions] : DINACTIONS;
+    }
+    function bindingRowHtml(i, b, actions, removable) {
+      return `
+        <div class="bind-group subcard" data-bind-index="${i}" style="margin-top: 0; margin-bottom: 12px; background: var(--surface-elevated);">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid var(--border); padding-bottom: 8px;">
             <span style="font-size: 0.85rem; font-weight: 700; color: var(--text);">Binding #${i + 1}</span>
-            <button type="button" class="btn-sm btn-secondary" onclick="clearBindRow(this)">Clear</button>
+            <div style="display:flex;gap:8px;">
+              <button type="button" class="btn-sm btn-secondary" onclick="clearBindRow(this)">Clear</button>
+              <button type="button" class="btn-sm btn-danger" ${removable ? '' : 'disabled'} onclick="removeBindRow(this)">Remove</button>
+            </div>
           </div>
 
           <div class="form-grid cols-3" style="margin-bottom: 12px;">
-            <div class="field"><label>Keypad ID</label><input name="btn${i}_keypad_id" type="number" min="0" value="${b.keypad_id || 0}"></div>
-            <div class="field"><label>Button ID</label><input name="btn${i}_id" type="number" min="0" value="${b.id || 0}"></div>
-            <div class="field"><label>LED Follow</label><select name="btn${i}_led_follow_mode">${optHtml(['0','1','2'], v => v, v => ({'0':'disabled','1':'on when HVAC on','2':'on when HVAC off'}[v]), String(b.led_follow_mode != null ? b.led_follow_mode : 0))}</select></div>
+            <div class="field"><label>Keypad ID</label><input data-bind-field="keypad_id" name="btn${i}_keypad_id" type="number" min="0" value="${b.keypad_id || 0}"></div>
+            <div class="field"><label>Button ID</label><input data-bind-field="id" name="btn${i}_id" type="number" min="0" value="${b.id || 0}"></div>
+            <div class="field"><label>LED Follow</label><select data-bind-field="led_follow_mode" name="btn${i}_led_follow_mode">${optHtml(['0','1','2'], v => v, v => ({'0':'disabled','1':'on when HVAC on','2':'on when HVAC off'}[v]), String(b.led_follow_mode != null ? b.led_follow_mode : 0))}</select></div>
           </div>
 
           <div class="field"><label style="color: var(--primary);">Press Event</label></div>
           <div class="form-grid cols-4" style="margin-bottom: 12px;">
-            <div class="field"><label>Action</label><select name="btn${i}_press_action">${optHtml(actions, v => v, v => v, b.press_action || 'none')}</select></div>
-            <div class="field"><label>Value</label><input name="btn${i}_press_value" type="number" step="0.5" value="${b.press_value != null ? b.press_value : 1}"></div>
-            <div class="field"><label>Mode Override</label><select name="btn${i}_press_mode_override">${optHtml(meta.mode_overrides || MODEOVERRIDES, v => v, v => v, b.press_mode_override || 'keep')}</select></div>
-            <div class="field"><label>Light</label><select name="btn${i}_press_light_mode">${optHtml(LIGHTMODES, v => v, v => v, b.press_light_mode || 'keep')}</select></div>
+            <div class="field"><label>Action</label><select data-bind-field="press_action" name="btn${i}_press_action">${optHtml(actions, v => v, v => v, b.press_action || 'none')}</select></div>
+            <div class="field"><label>Value</label><input data-bind-field="press_value" name="btn${i}_press_value" type="number" step="0.5" value="${b.press_value != null ? b.press_value : 1}"></div>
+            <div class="field"><label>Mode Override</label><select data-bind-field="press_mode_override" name="btn${i}_press_mode_override">${optHtml(meta.mode_overrides || MODEOVERRIDES, v => v, v => v, b.press_mode_override || 'keep')}</select></div>
+            <div class="field"><label>Light</label><select data-bind-field="press_light_mode" name="btn${i}_press_light_mode">${optHtml(LIGHTMODES, v => v, v => v, b.press_light_mode || 'keep')}</select></div>
           </div>
 
           <div class="field"><label style="color: var(--primary);">Hold Event</label></div>
           <div class="form-grid cols-4" style="margin-bottom: 12px;">
-            <div class="field"><label>Action</label><select name="btn${i}_hold_action">${optHtml(actions, v => v, v => v, b.hold_action || 'none')}</select></div>
-            <div class="field"><label>Value</label><input name="btn${i}_hold_value" type="number" step="0.5" value="${b.hold_value != null ? b.hold_value : 1}"></div>
-            <div class="field"><label>Mode Override</label><select name="btn${i}_hold_mode_override">${optHtml(meta.mode_overrides || MODEOVERRIDES, v => v, v => v, b.hold_mode_override || 'keep')}</select></div>
-            <div class="field"><label>Light</label><select name="btn${i}_hold_light_mode">${optHtml(LIGHTMODES, v => v, v => v, b.hold_light_mode || 'keep')}</select></div>
+            <div class="field"><label>Action</label><select data-bind-field="hold_action" name="btn${i}_hold_action">${optHtml(actions, v => v, v => v, b.hold_action || 'none')}</select></div>
+            <div class="field"><label>Value</label><input data-bind-field="hold_value" name="btn${i}_hold_value" type="number" step="0.5" value="${b.hold_value != null ? b.hold_value : 1}"></div>
+            <div class="field"><label>Mode Override</label><select data-bind-field="hold_mode_override" name="btn${i}_hold_mode_override">${optHtml(meta.mode_overrides || MODEOVERRIDES, v => v, v => v, b.hold_mode_override || 'keep')}</select></div>
+            <div class="field"><label>Light</label><select data-bind-field="hold_light_mode" name="btn${i}_hold_light_mode">${optHtml(LIGHTMODES, v => v, v => v, b.hold_light_mode || 'keep')}</select></div>
           </div>
 
           <div class="form-grid cols-3">
-            <div class="field"><label>Toggle Power Mode</label><select name="btn${i}_toggle_power_mode">${optHtml(meta.toggle_modes || ['auto','cool','heat','dry','fan'], v => v, v => v, b.toggle_power_mode || 'auto')}</select></div>
+            <div class="field"><label>Toggle Power Mode</label><select data-bind-field="toggle_power_mode" name="btn${i}_toggle_power_mode">${optHtml(meta.toggle_modes || ['auto','cool','heat','dry','fan'], v => v, v => v, b.toggle_power_mode || 'auto')}</select></div>
           </div>
         </div>`;
-      }
-      return html;
+    }
+    function bindField(row, name) {
+      return row.querySelector(`[data-bind-field="${name}"]`);
+    }
+    function collectBindingRows() {
+      return Array.from(document.querySelectorAll('#button_rows .bind-group')).map(row => ({
+        keypad_id: Number(bindField(row, 'keypad_id')?.value || 0),
+        id: Number(bindField(row, 'id')?.value || 0),
+        led_follow_mode: Number(bindField(row, 'led_follow_mode')?.value || 0),
+        press_action: bindField(row, 'press_action')?.value || 'none',
+        press_value: Number(bindField(row, 'press_value')?.value || 1),
+        press_mode_override: bindField(row, 'press_mode_override')?.value || 'keep',
+        press_light_mode: bindField(row, 'press_light_mode')?.value || 'keep',
+        hold_action: bindField(row, 'hold_action')?.value || 'none',
+        hold_value: Number(bindField(row, 'hold_value')?.value || 1),
+        hold_mode_override: bindField(row, 'hold_mode_override')?.value || 'keep',
+        hold_light_mode: bindField(row, 'hold_light_mode')?.value || 'keep',
+        toggle_power_mode: bindField(row, 'toggle_power_mode')?.value || 'auto'
+      }));
+    }
+    function renderBindingEditor(items, isCustom, customActions = []) {
+      const maxBindings = meta.max_dinplug_bindings_total || meta.max_dinplug_buttons || 24;
+      const rows = items.slice(0, maxBindings);
+      const actions = bindingActions(isCustom, customActions);
+      byId('button_rows').innerHTML = rows.length
+        ? rows.map((b, i) => bindingRowHtml(i, b, actions, rows.length > 1)).join('')
+        : '<div class="status">No button bindings yet. Click "Add Binding" to create one.</div>';
+      const used = meta.dinplug_bindings_used || 0;
+      const baseAvailable = meta.dinplug_bindings_available != null ? meta.dinplug_bindings_available : Math.max(0, maxBindings - used);
+      const currentHvacCount = rows.length;
+      const available = Math.max(0, baseAvailable + persistedBindingCount - currentHvacCount);
+      const canAdd = available > 0 && currentHvacCount < maxBindings;
+      byId('binding_pool_status').textContent = `DINplug bindings: ${used}/${maxBindings} used globally. ${available} available.`;
+      byId('add_binding_btn').disabled = !canAdd;
+      byId('add_binding_btn').textContent = canAdd ? 'Add Binding' : 'Binding Limit Reached';
+      bindBindingControls();
     }
     function actionUsesValue(action) {
       return ACTIONS_WITH_VALUE.has(String(action || '').toLowerCase());
@@ -621,6 +851,28 @@
       row.querySelectorAll('select').forEach(el => el.value = el.options[0].value);
       syncBindRow(row);
     };
+    window.removeBindRow = function(btn) {
+      const row = btn.closest('.bind-group');
+      if (!row) return;
+      const idx = Number(row.dataset.bindIndex || -1);
+      const current = collectBindingRows();
+      if (idx < 0 || idx >= current.length) return;
+      current.splice(idx, 1);
+      const h = (cfg.hvacs || [])[Number(byId('edit_index').value || 0)];
+      const cmds = h?.custom?.commands || [];
+      renderBindingEditor(current, h?.protocol === 'CUSTOM', cmds.map(c => 'custom:' + c.name));
+    };
+    byId('add_binding_btn').addEventListener('click', () => {
+      const current = collectBindingRows();
+      const maxBindings = meta.max_dinplug_bindings_total || meta.max_dinplug_buttons || 24;
+      const baseAvailable = meta.dinplug_bindings_available != null ? meta.dinplug_bindings_available : Math.max(0, maxBindings - (meta.dinplug_bindings_used || 0));
+      const available = Math.max(0, baseAvailable + persistedBindingCount - current.length);
+      if (current.length >= maxBindings || available <= 0) return;
+      current.push({});
+      const h = (cfg.hvacs || [])[Number(byId('edit_index').value || 0)];
+      const cmds = h?.custom?.commands || [];
+      renderBindingEditor(current, h?.protocol === 'CUSTOM', cmds.map(c => 'custom:' + c.name));
+    });
     async function reloadData() {
       [cfg, meta, status] = await Promise.all([J('/api/config'), J('/api/meta'), J('/api/status')]);
     }
@@ -638,9 +890,9 @@
     function renderHvacTable() {
       const rows = cfg.hvacs || [];
       byId('hvac_rows').innerHTML = rows.length
-        ? rows.map((h, i) => `<tr><td>${i}</td><td>${h.id}</td><td>${h.protocol}</td><td>${h.emitter}</td><td>${h.custom?.commands?.map(c => c.name).join(', ') || '-'}</td><td><a class="btn-danger" href="/hvacs/delete?index=${i}">Delete</a></td></tr>`).join('')
-        : '<tr><td colspan="6">No HVACs registered</td></tr>';
-      byId('status_list').textContent = `HVACs: ${rows.length}/${meta.max_hvacs || '?'}`;
+        ? rows.map((h, i) => `<tr><td>${i}</td><td>${h.id}</td><td>${h.protocol}</td><td>${hvacProfileName(h) || '-'}</td><td>${h.emitter}</td><td>${h.custom?.commands?.map(c => c.name).join(', ') || '-'}</td><td><a class="btn-danger" href="/devices/delete?index=${i}">Delete</a></td></tr>`).join('')
+        : '<tr><td colspan="7">No device profiles registered</td></tr>';
+      byId('status_list').textContent = `Device profiles: ${rows.length}/${meta.max_hvacs || '?'}`;
     }
 
     function renderEmitterTable() {
@@ -655,6 +907,7 @@
     function renderAddForm() {
       byId('add_protocol').innerHTML = protocolOpts('CUSTOM');
       byId('add_emitter').innerHTML = emitterOpts(0);
+      byId('add_profile_name').value = '';
       byId('add_temp_source').value = 'setpoint';
       byId('add_temp_index').innerHTML = sensorOpts(0);
       commandEditorState.add = Math.max(commandEditorState.add || 1, 1);
@@ -675,17 +928,17 @@
       const customs = (cfg.hvacs || []).map((h, i) => ({ h, i })).filter(x => x.h.protocol === 'CUSTOM');
       byId('clone_card').style.display = customs.length ? 'block' : 'none';
       if (!customs.length) return;
-      byId('clone_source').innerHTML = customs.map(x => `<option value="${x.i}">${x.h.id} (${x.h.custom?.commands?.length || 0} cmds)</option>`).join('');
+      byId('clone_source').innerHTML = customs.map(x => `<option value="${x.i}">${x.h.id}${hvacProfileName(x.h) ? ' - ' + hvacProfileName(x.h) : ''} (${x.h.custom?.commands?.length || 0} cmds)</option>`).join('');
       byId('clone_emitter').innerHTML = emitterOpts(0);
     }
 
     function renderEditSelector() {
       const hvacs = cfg.hvacs || [];
       if (!hvacs.length) {
-        byId('edit_card').innerHTML = '<p style="color:var(--text-muted)">No HVACs to edit. Add one first.</p>';
+        byId('edit_card').innerHTML = '<p style="color:var(--text-muted)">No device profiles to edit. Add one first.</p>';
         return;
       }
-      byId('edit_index').innerHTML = hvacs.map((h, i) => `<option value="${i}">${h.id} (${h.protocol})</option>`).join('');
+      byId('edit_index').innerHTML = hvacs.map((h, i) => `<option value="${i}">${h.id} (${h.protocol}${hvacProfileName(h) ? ' - ' + hvacProfileName(h) : ''})</option>`).join('');
       syncEdit();
     }
     function syncEdit() {
@@ -695,6 +948,7 @@
       byId('edit_protocol').innerHTML = protocolOpts(h.protocol);
       byId('edit_emitter').innerHTML = emitterOpts(h.emitter);
       byId('edit_model').value = h.model;
+      byId('edit_profile_name').value = hvacProfileName(h);
       byId('edit_temp_source').value = h.current_temp_source || 'setpoint';
       byId('edit_temp_source').disabled = h.protocol === 'CUSTOM';
       byId('edit_temp_index').innerHTML = sensorOpts(h.temp_sensor_index || 0);
@@ -706,10 +960,9 @@
       renderCommandEditor('edit_commands', 'cc', cmds, 'edit');
       byId('edit_custom').style.display = h.protocol === 'CUSTOM' ? 'block' : 'none';
       const buttons = h.dinplug?.buttons || [];
-      buttons._customActions = cmds.map(c => 'custom:' + c.name);
-      byId('button_rows').innerHTML = buttonRows(buttons, h.protocol === 'CUSTOM');
-      bindBindingControls();
-      byId('status_edit').textContent = `Editing: ${h.id}`;
+      persistedBindingCount = buttons.length;
+      renderBindingEditor(buttons, h.protocol === 'CUSTOM', cmds.map(c => 'custom:' + c.name));
+      byId('status_edit').textContent = `Editing: ${h.id}. This profile uses ${buttons.length} binding(s).`;
     }
     byId('edit_index').addEventListener('change', syncEdit);
     byId('edit_temp_source').addEventListener('change', () => {
@@ -720,7 +973,7 @@
     });
 
     function renderTestForm() {
-      byId('test_hvac').innerHTML = (cfg.hvacs || []).map(h => `<option value="${h.id}">${h.id} (${h.protocol})</option>`).join('');
+      byId('test_hvac').innerHTML = (cfg.hvacs || []).map(h => `<option value="${h.id}">${h.id} (${h.protocol}${hvacProfileName(h) ? ' - ' + hvacProfileName(h) : ''})</option>`).join('');
       byId('raw_emitter').innerHTML = emitterOpts(0);
       syncTestCustom();
     }
@@ -751,7 +1004,7 @@
     byId('test_form').addEventListener('submit', async e => {
       e.preventDefault();
       try {
-        const res = await fetch('/hvacs/test', { method: 'POST', body: new URLSearchParams(new FormData(e.target)) });
+        const res = await fetch('/devices/test', { method: 'POST', body: new URLSearchParams(new FormData(e.target)) });
         byId('test_response').textContent = JSON.stringify(await res.json(), null, 2);
       } catch (err) {
         byId('test_response').textContent = 'Error: ' + err;

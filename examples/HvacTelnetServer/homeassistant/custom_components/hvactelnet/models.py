@@ -15,6 +15,8 @@ class HvacDescription:
     model: int | None
     emitter: int | None
     is_custom: bool
+    profile_name: str = ""
+    custom_commands: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)

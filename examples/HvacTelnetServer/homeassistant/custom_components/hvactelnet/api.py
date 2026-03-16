@@ -113,12 +113,23 @@ class HvacTelnetClient:
         hvacs: dict[str, HvacDescription] = {}
         for item in response.get("hvacs", []):
             hvac_id = str(item["id"])
+            commands: list[str] = []
+            custom_data = item.get("custom_data")
+            if isinstance(custom_data, dict):
+                for command in custom_data.get("commands", []):
+                    if not isinstance(command, dict):
+                        continue
+                    name = str(command.get("name", "")).strip()
+                    if name:
+                        commands.append(name)
             hvacs[hvac_id] = HvacDescription(
                 hvac_id=hvac_id,
                 protocol=str(item.get("protocol", "")),
                 model=item.get("model"),
                 emitter=item.get("emitter"),
                 is_custom=bool(item.get("custom", False)),
+                profile_name=str(item.get("profile_name", "")).strip(),
+                custom_commands=tuple(commands),
             )
         return hvacs
 
