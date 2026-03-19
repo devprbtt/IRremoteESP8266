@@ -595,15 +595,25 @@
       html += `<div class="subcard-actions"><button type="button" class="btn-sm btn-secondary" ${visible >= limit ? 'disabled' : ''} onclick="addCommandRow('${key}')">Add Command</button></div>`;
       target.innerHTML = html;
     }
+    function collectCommandEditorValues(targetId) {
+      const target = byId(targetId);
+      if (!target) return [];
+      return Array.from(target.querySelectorAll('.cmd-row')).map(row => ({
+        name: row.querySelector('input[name$="_name"]')?.value || '',
+        encoding: row.querySelector('select[name$="_encoding"]')?.value || 'pronto',
+        code: row.querySelector('textarea[name$="_code"]')?.value || ''
+      }));
+    }
     window.addCommandRow = function(key) {
       const limit = meta.max_custom_commands || 16;
+      const current = key === 'add'
+        ? collectCommandEditorValues('add_commands')
+        : collectCommandEditorValues('edit_commands');
       commandEditorState[key] = Math.min(limit, (commandEditorState[key] || 1) + 1);
       if (key === 'add') {
-        renderCommandEditor('add_commands', 'cc', [], 'add');
+        renderCommandEditor('add_commands', 'cc', current, 'add');
       } else {
-        const idx = Number(byId('edit_index').value || 0);
-        const h = (cfg.hvacs || [])[idx];
-        renderCommandEditor('edit_commands', 'cc', h?.custom?.commands || [], 'edit');
+        renderCommandEditor('edit_commands', 'cc', current, 'edit');
       }
     };
     window.removeCommandRow = function(btn, key) {
