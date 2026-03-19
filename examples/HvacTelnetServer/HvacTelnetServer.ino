@@ -188,6 +188,7 @@ String telnetBuffers[kMaxTelnetClients];
 WiFiClient dinplugClient;
 String dinplugBuffer;
 bool dinplugConnected = false;
+bool dinplugWasConnected = false;
 unsigned long dinplugLastAttemptMs = 0;
 unsigned long dinplugLastKeepAliveMs = 0;
 unsigned long dinplugLastRxMs = 0;
@@ -3710,6 +3711,8 @@ bool sendDinplugCommand(const String &cmd) {
   if (written == 0) {
     dinplugClient.stop();
     dinplugConnected = false;
+    dinplugWasConnected = false;
+    Serial.println("dinplug: tx failed, reconnecting");
     if (telnetMonitorEnabled && monitorLogDinplugEnabled) addMonitorLogEntry("din: tx failed, reconnecting");
     return false;
   }
@@ -3760,6 +3763,7 @@ void ensureDinplugConnected(bool forceNow) {
   Serial.println(gatewayHost);
   if (dinplugClient.connect(gatewayHost.c_str(), kDinplugPort)) {
     dinplugConnected = true;
+    dinplugWasConnected = true;
     dinplugBuffer = "";
     dinplugLastKeepAliveMs = millis();
     dinplugLastRxMs = millis();
@@ -3810,6 +3814,12 @@ void processDinplugLine(const String &line) {
 void handleDinplug() {
   if (config.dinplug.gatewayHost.length() == 0) return;
   if (config.dinplug.autoConnect) ensureDinplugConnected(false);
+  if (!dinplugClient.connected() && dinplugWasConnected) {
+    dinplugWasConnected = false;
+    dinplugConnected = false;
+    Serial.println("dinplug: disconnected");
+    if (telnetMonitorEnabled && monitorLogDinplugEnabled) addMonitorLogEntry("din: disconnected");
+  }
   if (!dinplugClient.connected()) return;
   unsigned long now = millis();
   if ((now - dinplugLastKeepAliveMs) > kDinplugKeepAliveIntervalMs) {
@@ -3820,9 +3830,11 @@ void handleDinplug() {
     dinplugLastKeepAliveMs = now;
   }
   if (dinplugLastRxMs > 0 && (now - dinplugLastRxMs) > kDinplugRxTimeoutMs) {
+    Serial.println("dinplug: rx timeout, reconnecting");
     if (telnetMonitorEnabled && monitorLogDinplugEnabled) addMonitorLogEntry("din: rx timeout, reconnecting");
     dinplugClient.stop();
     dinplugConnected = false;
+    dinplugWasConnected = false;
     ensureDinplugConnected(true);
     return;
   }
