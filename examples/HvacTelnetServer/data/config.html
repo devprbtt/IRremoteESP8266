@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
   <meta name="theme-color" content="#0a0e14">
   <title>Config - IR Server Telnet</title>
+  <script src="/version.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; }
     :root {
@@ -134,6 +135,12 @@
       flex-direction: column;
       gap: 6px;
     }
+    .input-with-action {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+    }
     .field label {
       font-size: 0.7rem;
       font-weight: 600;
@@ -169,6 +176,16 @@
     }
     .btn-primary { background: var(--success); }
     .btn-secondary { background: var(--primary); }
+    .btn-outline {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    .btn-inline {
+      width: auto;
+      padding: 11px 12px;
+      font-size: 0.8rem;
+    }
     .check {
       display: flex;
       align-items: center;
@@ -255,7 +272,13 @@
         </div>
         <div class="form-grid">
           <div class="field"><label>SSID</label><input id="ssid"></div>
-          <div class="field"><label>Password</label><input id="password" type="password"></div>
+          <div class="field">
+            <label>Password</label>
+            <div class="input-with-action">
+              <input id="password" type="password">
+              <button class="btn-outline btn-inline" type="button" data-toggle-password="password">Show</button>
+            </div>
+          </div>
         </div>
         <div class="check" style="margin-top:12px;"><input id="dhcp" type="checkbox"><span>Use DHCP</span></div>
         <div class="form-grid">
@@ -274,11 +297,18 @@
         <div class="form-grid">
           <div class="field"><label>Hostname</label><input id="hostname"></div>
           <div class="field"><label>Telnet Port</label><input id="telnet_port" type="number" min="1" max="65535"></div>
+          <div class="field"><label>Timezone (UTC Offset)</label><input id="timezone" placeholder="-03:00"></div>
         </div>
         <div class="form-grid cols-1" style="margin-top:12px;">
-          <div class="field"><label>Web Password</label><input id="web_password" type="password"></div>
+          <div class="field">
+            <label>Web Password</label>
+            <div class="input-with-action">
+              <input id="web_password" type="password">
+              <button class="btn-outline btn-inline" type="button" data-toggle-password="web_password">Show</button>
+            </div>
+          </div>
         </div>
-        <p class="hint">Leave web password empty to disable authentication.</p>
+        <p class="hint">Leave web password empty to disable authentication. Timezone uses fixed UTC offset format like <code>-03:00</code>, <code>+00:00</code>, or <code>+05:30</code>.</p>
       </div>
       <div class="card">
         <h3 class="card-title">Ethernet</h3>
@@ -378,6 +408,22 @@
     let config = null;
     let status = null;
 
+    function fillLiveNetworkFields(force = false) {
+      const live = {
+        ip: status?.ip || '',
+        gateway: status?.gateway || '',
+        subnet: status?.subnet || '',
+        dns: status?.dns || ''
+      };
+      ['ip', 'gateway', 'subnet', 'dns'].forEach((key) => {
+        const input = byId(key);
+        if (!input) return;
+        if (force || !String(input.value || '').trim()) {
+          input.value = live[key];
+        }
+      });
+    }
+
     // Tab switching
     document.querySelectorAll('.tab').forEach(tab => {
       tab.addEventListener('click', () => {
@@ -396,7 +442,9 @@
       byId('gateway').value = c.wifi.gateway || '';
       byId('subnet').value = c.wifi.subnet || '';
       byId('dns').value = c.wifi.dns || '';
+      if (c.wifi.dhcp) fillLiveNetworkFields(true);
       byId('hostname').value = c.hostname || '';
+      byId('timezone').value = c.timezone || '+00:00';
       byId('telnet_port').value = c.telnet_port || 4998;
       byId('web_password').value = c.web?.password || '';
       byId('eth_enabled').checked = !!c.ethernet?.enabled;
@@ -421,6 +469,7 @@
       config.wifi.subnet = byId('subnet').value;
       config.wifi.dns = byId('dns').value;
       config.hostname = byId('hostname').value;
+      config.timezone = byId('timezone').value;
       config.telnet_port = parseInt(byId('telnet_port').value || '4998', 10);
       config.web = config.web || {};
       config.web.password = byId('web_password').value;
@@ -505,8 +554,20 @@
     async function init() {
       [config, status] = await Promise.all([J('/api/config'), J('/api/status')]);
       loadForm(config);
+      byId('dhcp').addEventListener('change', () => {
+        if (!byId('dhcp').checked) fillLiveNetworkFields();
+      });
       byId('scan_btn').addEventListener('click', () => scanWifi().catch(e => byId('scan_feedback').textContent = 'Scan failed: ' + e));
       byId('ssid_scan').addEventListener('change', e => { if (e.target.value) byId('ssid').value = e.target.value; });
+      document.querySelectorAll('[data-toggle-password]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const input = byId(btn.dataset.togglePassword);
+          if (!input) return;
+          const show = input.type === 'password';
+          input.type = show ? 'text' : 'password';
+          btn.textContent = show ? 'Hide' : 'Show';
+        });
+      });
       byId('save_btn').addEventListener('click', () => saveConfig().catch(e => byId('status').textContent = 'Save failed: ' + e));
     }
     init().catch(e => byId('status').textContent = 'Load failed: ' + e);

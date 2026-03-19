@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
   <meta name="theme-color" content="#0a0e14">
   <title>IR Server Telnet</title>
+  <script src="/version.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; }
     :root {
@@ -256,6 +257,7 @@
         <div class="info-row"><span class="info-label">Temp Sensors</span><span class="info-value">${s.temp_sensors_enabled ? s.temp_sensor_count + " found" : "Disabled"}</span></div>
         ${s.temp_sensors_enabled ? (sensorRows || '<div class="info-row"><span class="info-label">Sensor Readings</span><span class="info-value">No sensors detected</span></div>') : ''}
         <div class="info-row"><span class="info-label">DINplug</span><span class="info-value">${s.dinplug_status || "-"}</span></div>
+        <div class="info-row"><span class="info-label">Versions</span><span class="info-value">FW ${s.firmware_version || "-"} | FS ${s.filesystem_version || "-"}${s.version_match ? "" : " | mismatch"}</span></div>
       `;
     }
 

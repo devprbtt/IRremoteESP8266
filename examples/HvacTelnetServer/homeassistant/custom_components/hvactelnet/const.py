@@ -6,7 +6,7 @@ from homeassistant.const import Platform
 
 DOMAIN = "hvactelnet"
 DEFAULT_PORT = 4998
-PLATFORMS = (Platform.CLIMATE, Platform.BUTTON)
+PLATFORMS = (Platform.CLIMATE, Platform.BUTTON, Platform.SENSOR)
 
 DATA_CLIENT = "client"
 DATA_COORDINATOR = "coordinator"

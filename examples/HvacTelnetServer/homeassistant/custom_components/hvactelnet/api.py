@@ -146,6 +146,20 @@ class HvacTelnetClient:
             states[str(item["id"])] = item
         return states
 
+    async def async_get_status(self) -> dict[str, Any]:
+        """Fetch runtime and version status for diagnostics."""
+        response = await self._request(
+            {"cmd": "status"},
+            matcher=lambda msg: (
+                isinstance(msg, dict)
+                and bool(msg.get("ok"))
+                and str(msg.get("type", "")) == "status"
+            ),
+        )
+        if not isinstance(response, dict):
+            raise HvacTelnetCommandError("Unexpected status response")
+        return response
+
     async def async_send(self, hvac_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         """Send a state-changing command."""
         full_payload = {"cmd": "send", "id": hvac_id, **payload}

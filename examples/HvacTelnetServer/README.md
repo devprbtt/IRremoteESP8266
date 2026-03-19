@@ -5,6 +5,7 @@ ESP32 IR bridge with:
 - Web UI for WiFi/Ethernet, emitters, devices, DINplug, monitor, API reference, and OTA.
 - Standard HVAC protocols (IRremoteESP8266 `IRac`) plus `CUSTOM` commands.
 - Optional IR receiver logging and IR learn flow for custom command capture.
+- Explicit firmware/filesystem version tracking with UI mismatch warning.
 
 ## Quick start
 - Build with PlatformIO using `examples/HvacTelnetServer/platformio.ini`.
@@ -21,6 +22,17 @@ ESP32 IR bridge with:
 - `/dinplug`: DINplug gateway config + test.
 - `/system`: Monitor, live stats, API reference, firmware updates, and config backup/restore in one page.
 - `/config/download`: download current config JSON.
+
+## Versioning
+- Current firmware version: `0.2.0`
+- Current filesystem/UI version: `0.2.0`
+- The firmware exposes:
+  - `firmware_version`
+  - `filesystem_version`
+  - `filesystem_version_expected`
+  - `version_match`
+- If the running UI/filesystem does not match what the firmware expects, the web UI shows a warning banner.
+- Normal updates do not erase saved configuration by themselves. A mismatch warning means you should upload the matching `firmware.bin` or `spiffs.bin`, not that your settings were wiped.
 
 ## Custom protocol workflow
 In **Add Device Profile** (`/devices`):
@@ -84,6 +96,11 @@ Get all device states:
 {"cmd":"get_all"}
 ```
 
+Get runtime/version status:
+```json
+{"cmd":"status"}
+```
+
 Send standard HVAC command:
 ```json
 {"cmd":"send","id":"1","power":"on","mode":"cool","temp":24,"fan":"auto","light":"true"}
@@ -125,15 +142,368 @@ Behavior notes:
 - `send` returns immediate acknowledgement as JSON.
 - `get` returns a single state object.
 - `get_all` returns an array of state objects.
+- `status` returns runtime diagnostics and version info.
 - On telnet client connect/reconnect, current states are pushed automatically.
 - State changes from non-telnet sources (for example DINplug actions) are also broadcast to telnet clients.
 - `/system` now includes an API tab with these commands and examples for third-party integrations.
 
-## IR learn API
-Used by the web UI and available for direct calls:
-- `POST /api/ir/learn/start` (body: `encoding=<pronto|gc|racepoint|rawhex>`)
+## HTTP API
+All HTTP endpoints are local to the device and, when web authentication is enabled, require the same authentication used by the browser UI.
+
+### Read-only endpoints
+Get the full persisted configuration JSON:
+- `GET /api/config`
+
+Get one device state by firmware `id`:
+- `GET /api/device/get?id=1`
+
+Get all device states:
+- `GET /api/device/get_all`
+
+Get live runtime/system status:
+- `GET /api/status`
+
+Returned fields include:
+- `firmware_version`
+- `filesystem_version`
+- `filesystem_version_expected`
+- `version_match`
+- `network_mode`
+- `ip`
+- `hostname`
+- `uptime_ms`
+- `telnet_port`
+- `dinplug_status`
+- `emitter_count`
+- `hvac_count`
+- `dinplug_bindings_used`
+- `dinplug_bindings_total`
+- `ir_receiver_enabled`
+- `ir_receiver_gpio`
+- `heap_free`
+- `heap_min_free`
+- `heap_max_alloc`
+- `telnet_clients_active`
+- `telnet_clients`
+- `temp_sensors_enabled`
+- `temp_sensor_count`
+- `temp_sensor_precision`
+- `temp_sensors`
+- `ethernet_enabled`
+- `wifi_rssi`
+
+Example:
+```json
+{
+  "network_mode": "WiFi STA",
+  "ip": "192.168.51.10",
+  "hostname": "ir-server",
+  "uptime_ms": 123456,
+  "telnet_port": 4998,
+  "dinplug_status": "connected",
+  "emitter_count": 1,
+  "hvac_count": 3,
+  "dinplug_bindings_used": 5,
+  "dinplug_bindings_total": 24,
+  "heap_free": 213456,
+  "heap_min_free": 190120,
+  "heap_max_alloc": 131060,
+  "telnet_clients_active": 2,
+  "wifi_rssi": -58
+}
+```
+
+Get UI/integration metadata and limits:
+- `GET /api/meta`
+
+Returned fields include:
+- `firmware_version`
+- `filesystem_version`
+- `filesystem_version_expected`
+- `version_match`
+- `protocols`
+- `gpio_options`
+- `din_actions`
+- `toggle_modes`
+- `mode_overrides`
+- `light_modes`
+- `max_custom_commands`
+- `max_dinplug_buttons`
+- `max_dinplug_bindings_total`
+- `dinplug_bindings_used`
+- `dinplug_bindings_available`
+- `max_temp_sensors`
+- `max_emitters`
+- `max_hvacs`
+
+Scan for nearby WiFi networks:
+- `GET /api/wifi/scan`
+
+Example response:
+```json
+{
+  "networks": [
+    {"ssid": "Office", "rssi": -52},
+    {"ssid": "Guest", "rssi": -71}
+  ]
+}
+```
+
+### Device control endpoints
+These HTTP endpoints mirror the telnet control API and support both standard HVAC profiles and custom command profiles.
+
+Send a standard HVAC command or a custom profile command:
+- `POST /api/device/send`
+
+Accepted as either:
+- JSON body, content type `application/json`
+- form fields in the POST body
+
+Standard HVAC example:
+```bash
+curl -X POST http://ir-server.local/api/device/send \
+  -H "Content-Type: application/json" \
+  -d '{"id":"1","power":"on","mode":"cool","temp":24,"fan":"auto","light":"true"}'
+```
+
+Custom profile example using a registered command:
+```bash
+curl -X POST http://ir-server.local/api/device/send \
+  -H "Content-Type: application/json" \
+  -d '{"id":"5","command_name":"power_on"}'
+```
+
+Form-encoded example:
+```bash
+curl -X POST http://ir-server.local/api/device/send \
+  -d "id=1" \
+  -d "power=on" \
+  -d "mode=cool" \
+  -d "temp=24" \
+  -d "fan=auto" \
+  -d "light=true"
+```
+
+Supported standard HVAC fields:
+- `id`
+- `power`
+- `mode`
+- `temp`
+- `fan`
+- `swingv`
+- `swingh`
+- `light`
+- `quiet`
+- `turbo`
+- `econo`
+- `filter`
+- `clean`
+- `beep`
+- `sleep`
+- `clock`
+- `celsius`
+- `model`
+
+Supported custom profile fields:
+- `id`
+- `command_name`
+- `command`
+- `code`
+- `encoding`
+- optional state fields like `mode`, `temp`, `fan`, `light`
+
+Response behavior:
+- success returns the same state JSON shape as telnet `send`
+- application-level errors return JSON such as:
+```json
+{"ok":false,"error":"unknown_id"}
+{"ok":false,"error":"unknown_custom_command"}
+{"ok":false,"error":"send_failed"}
+```
+
+Send raw IR without a configured device profile:
+- `POST /api/device/raw`
+
+Accepted as either JSON or form data.
+
+Example:
+```bash
+curl -X POST http://ir-server.local/api/device/raw \
+  -H "Content-Type: application/json" \
+  -d '{"emitter":0,"encoding":"pronto","code":"0000 006D 0000 0022 ..."}'
+```
+
+Form-encoded example:
+```bash
+curl -X POST http://ir-server.local/api/device/raw \
+  -d "emitter=0" \
+  -d "encoding=pronto" \
+  -d "code=0000 006D 0000 0022 ..."
+```
+
+Response examples:
+```json
+{"ok":true}
+{"ok":false,"error":"invalid_emitter"}
+{"ok":false,"error":"send_failed"}
+```
+
+### Configuration write endpoint
+Replace the full saved configuration and reboot:
+- `POST /api/config/save`
+- body: raw JSON matching the exported config format
+- content type: `application/json`
+
+Success response:
+```json
+{"ok":true,"rebooting":true}
+```
+
+Failure responses:
+```json
+{"ok":false,"error":"missing_body"}
+{"ok":false,"error":"invalid_json","detail":"..."}
+{"ok":false,"error":"config_write_failed"}
+```
+
+Example:
+```bash
+curl -X POST http://ir-server.local/api/config/save \
+  -H "Content-Type: application/json" \
+  --data @config.json
+```
+
+### Monitor API
+Get current monitor state and recent log lines:
+- `GET /api/monitor`
+- optional query: `limit=<1..80>`
+
+Returned fields:
+- `enabled`
+- `filters.telnet`
+- `filters.state`
+- `filters.dinplug`
+- `filters.ir`
+- `lines`
+
+Example:
+```json
+{
+  "enabled": true,
+  "filters": {
+    "telnet": true,
+    "state": true,
+    "dinplug": true,
+    "ir": false
+  },
+  "lines": [
+    "[1234 ms] RX slot=0 from 192.168.1.2:54321 line={\"cmd\":\"list\"}"
+  ]
+}
+```
+
+Set monitor enabled state and category filters:
+- `POST /monitor/toggle`
+- form body fields:
+  - `enabled=0|1`
+  - `telnet=0|1`
+  - `state=0|1`
+  - `dinplug=0|1`
+  - `ir=0|1`
+
+Response:
+```json
+{
+  "ok": true,
+  "enabled": true,
+  "filters": {
+    "telnet": true,
+    "state": true,
+    "dinplug": false,
+    "ir": true
+  }
+}
+```
+
+Clear the in-memory monitor log:
+- `POST /monitor/clear`
+
+Response:
+```json
+{"ok":true}
+```
+
+### IR learn API
+Used by the web UI and available for direct calls.
+
+Start a learn session:
+- `POST /api/ir/learn/start`
+- form body: `encoding=<pronto|gc|racepoint|rawhex>`
+
+Success response:
+```json
+{"ok":true,"active":true,"encoding":"pronto"}
+```
+
+Disabled receiver response:
+```json
+{"ok":false,"error":"ir_receiver_disabled"}
+```
+
+Poll learn status:
 - `GET /api/ir/learn/poll`
+
+Fields:
+- `ok`
+- `active`
+- `ready`
+- `encoding`
+- `elapsed_ms`
+- `error` when failed or cancelled
+- `code` when ready
+
+Examples:
+```json
+{"ok":true,"active":true,"ready":false,"encoding":"pronto","elapsed_ms":1420}
+{"ok":true,"active":false,"ready":true,"encoding":"pronto","elapsed_ms":3221,"code":"0000 006D 0000 0022 ..."}
+{"ok":true,"active":false,"ready":false,"encoding":"pronto","elapsed_ms":10015,"error":"timeout"}
+```
+
+Cancel a learn session:
 - `POST /api/ir/learn/cancel`
+
+### Maintenance HTTP endpoints
+These are used by the web UI rather than third-party automation, but they are part of the device HTTP surface:
+
+- `POST /firmware/update`
+  - multipart form upload field: `firmware`
+- `POST /spiffs/update`
+  - multipart form upload field: `filesystem`
+- `POST /system/factory-reset`
+  - clears saved config and persisted runtime state, then reboots
+
+### HTTP integration notes
+- `GET /api/config` returns the same JSON structure used by `/config/download`.
+- `GET /api/device/get` and `GET /api/device/get_all` return the same state objects used by the telnet API.
+- `POST /api/device/send` and `POST /api/device/raw` reuse the same backend logic as telnet commands.
+- `POST /api/config/save` replaces the full config; it is not a partial patch endpoint.
+- `/api/monitor` is read-only; use `/monitor/toggle` and `/monitor/clear` to change monitor state.
+- The web UI in `/system#api` includes copyable examples and a read-only API tester for safe endpoints.
+
+## Home Assistant
+- The bundled custom component lives under `examples/HvacTelnetServer/homeassistant/custom_components/hvactelnet`.
+- The integration supports Zeroconf discovery once the custom component is installed in Home Assistant.
+- Firmware advertises `_hvactelnet._tcp.local.` over mDNS on the telnet port.
+- Climate entities are exposed as control entities.
+- Custom profile commands are exposed as button entities.
+- Diagnostic entities are exposed as sensor entities for items like:
+  - firmware version
+  - filesystem version
+  - version status
+  - WiFi RSSI
+  - free heap
+  - telnet client count
+  - network mode
 
 ## DINplug
 - Supports IP or DNS hostname gateway.

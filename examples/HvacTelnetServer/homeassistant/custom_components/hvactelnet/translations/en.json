@@ -2,12 +2,16 @@
   "config": {
     "step": {
       "user": {
-        "title": "Connect to HvacTelnetServer",
+        "title": "Connect to IR Server Telnet",
         "description": "Enter the ESP32 host and telnet port.",
         "data": {
           "host": "Host",
           "port": "Port"
         }
+      },
+      "zeroconf_confirm": {
+        "title": "Discovered IR Server Telnet",
+        "description": "Set up {name} at {host}:{port}."
       }
     },
     "error": {

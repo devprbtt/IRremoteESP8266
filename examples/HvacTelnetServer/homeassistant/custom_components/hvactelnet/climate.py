@@ -13,6 +13,7 @@ from homeassistant.components.climate.const import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -89,9 +90,11 @@ class HvacTelnetClimateEntity(CoordinatorEntity[HvacTelnetCoordinator], ClimateE
         description: HvacDescription,
     ) -> None:
         super().__init__(coordinator)
+        self._entry_id = entry_id
         self._description = description
         self._attr_unique_id = f"{entry_id}_{description.hvac_id}"
         self._attr_name = _display_name(description)
+        self._attr_has_entity_name = True
 
     @property
     def hvac_id(self) -> str:
@@ -237,6 +240,20 @@ class HvacTelnetClimateEntity(CoordinatorEntity[HvacTelnetCoordinator], ClimateE
     def _state(self) -> dict[str, Any] | None:
         """Return the current raw state."""
         return self.coordinator.data.states.get(self._description.hvac_id)
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return the parent device info."""
+        status = self.coordinator.data.status
+        host = str(status.get("hostname") or getattr(self.coordinator.client, "_host", "ir-server"))
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._entry_id)},
+            name=f"IR Server Telnet ({host})",
+            manufacturer="Zafiro",
+            model="IR Server Telnet",
+            sw_version=str(status.get("firmware_version") or "unknown"),
+            configuration_url=f"http://{host}.local/",
+        )
 
 
 def _as_float(value: Any) -> float | None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -58,11 +59,13 @@ class HvacTelnetCommandButton(CoordinatorEntity[HvacTelnetCoordinator], ButtonEn
         command_name: str,
     ) -> None:
         super().__init__(coordinator)
+        self._entry_id = entry_id
         self._description = description
         self._command_name = command_name
         base_name = description.profile_name or f"Device {description.hvac_id}"
         self._attr_unique_id = f"{entry_id}_{description.hvac_id}_{command_name}_button"
         self._attr_name = f"{base_name} {command_name}"
+        self._attr_has_entity_name = True
 
     @property
     def available(self) -> bool:
@@ -76,4 +79,18 @@ class HvacTelnetCommandButton(CoordinatorEntity[HvacTelnetCoordinator], ButtonEn
         await self.coordinator.client.async_send(
             self._description.hvac_id,
             {"command_name": self._command_name},
+        )
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return the parent device info."""
+        status = self.coordinator.data.status
+        host = str(status.get("hostname") or getattr(self.coordinator.client, "_host", "ir-server"))
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._entry_id)},
+            name=f"IR Server Telnet ({host})",
+            manufacturer="Zafiro",
+            model="IR Server Telnet",
+            sw_version=str(status.get("firmware_version") or "unknown"),
+            configuration_url=f"http://{host}.local/",
         )

@@ -31,12 +31,14 @@ class HvacTelnetCoordinator(DataUpdateCoordinator[HvacSnapshot]):
         try:
             hvacs = await self.client.async_get_hvacs()
             states = await self.client.async_get_all_states()
+            status = await self.client.async_get_status()
         except HvacTelnetError as err:
             raise UpdateFailed(str(err)) from err
 
         return HvacSnapshot(
             hvacs=hvacs,
             states=states,
+            status=status,
             available=True,
         )
 
@@ -46,6 +48,7 @@ class HvacTelnetCoordinator(DataUpdateCoordinator[HvacSnapshot]):
         next_data = HvacSnapshot(
             hvacs=self.data.hvacs,
             states=deepcopy(self.data.states),
+            status=self.data.status,
             available=True,
         )
         next_data.states[hvac_id] = dict(state)
@@ -59,6 +62,7 @@ class HvacTelnetCoordinator(DataUpdateCoordinator[HvacSnapshot]):
             HvacSnapshot(
                 hvacs=self.data.hvacs,
                 states=self.data.states,
+                status=self.data.status,
                 available=available,
             )
         )

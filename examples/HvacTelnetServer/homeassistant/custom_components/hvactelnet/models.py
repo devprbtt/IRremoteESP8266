@@ -25,4 +25,5 @@ class HvacSnapshot:
 
     hvacs: dict[str, HvacDescription] = field(default_factory=dict)
     states: dict[str, dict[str, Any]] = field(default_factory=dict)
+    status: dict[str, Any] = field(default_factory=dict)
     available: bool = False

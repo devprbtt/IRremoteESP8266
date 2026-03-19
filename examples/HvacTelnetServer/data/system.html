@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
   <meta name="theme-color" content="#0a0e14">
   <title>System - IR Server Telnet</title>
+  <script src="/version.js"></script>
   <style>
     *, *::before, *::after { box-sizing: border-box; }
     :root {
@@ -410,19 +411,20 @@
     </header>
 
     <div class="tabs">
-      <button class="tab active" data-tab="monitor">Monitor</button>
-      <button class="tab" data-tab="stats">Stats</button>
+      <button class="tab" data-tab="monitor">Monitor</button>
+      <button class="tab active" data-tab="stats">Stats</button>
       <button class="tab" data-tab="api">API</button>
       <button class="tab" data-tab="firmware">Firmware</button>
       <button class="tab" data-tab="backup">Backup</button>
     </div>
 
     <!-- MONITOR TAB -->
-    <div id="tab-monitor" class="tab-content active">
+    <div id="tab-monitor" class="tab-content">
       <div class="card">
         <h3 class="card-title">Live Log</h3>
         <div class="row">
           <div class="status-pill"><span id="dot" class="status-dot"></span><span id="mon_state">Loading...</span></div>
+          <button class="btn-outline btn-sm" type="button" id="refresh_btn">Refresh</button>
           <button class="btn-secondary btn-sm" type="button" id="toggle_btn">Toggle</button>
           <button class="btn-outline btn-sm" type="button" id="clear_btn">Clear</button>
         </div>
@@ -432,8 +434,9 @@
           <label class="filter-chip"><input id="filter_dinplug" type="checkbox"><span>DINplug</span></label>
           <label class="filter-chip"><input id="filter_ir" type="checkbox"><span>IR</span></label>
         </div>
-        <div id="log_box" class="terminal">Loading...</div>
+        <div id="log_box" class="terminal">Monitor is idle. Open this tab and click Refresh if you want to load the log.</div>
         <div class="row" style="margin-top:12px;">
+          <button class="btn-outline btn-sm" type="button" id="copy_logs_btn">Copy Recent Logs</button>
           <button class="btn-outline btn-sm" type="button" id="copy_last_btn">Copy Last IR</button>
           <button class="btn-outline btn-sm" type="button" id="copy_all_btn">Copy All IR</button>
         </div>
@@ -442,7 +445,7 @@
     </div>
 
     <!-- STATS TAB -->
-    <div id="tab-stats" class="tab-content">
+    <div id="tab-stats" class="tab-content active">
       <div class="card">
         <h3 class="card-title">Live System Stats</h3>
         <div class="link-grid" style="gap:12px;">
@@ -455,6 +458,7 @@
           <div class="link-card">Telnet Clients<small id="stat_telnet">Loading...</small></div>
           <div class="link-card">DINplug<small id="stat_dinplug">Loading...</small></div>
           <div class="link-card">Config Counts<small id="stat_counts">Loading...</small></div>
+          <div class="link-card">Versions<small id="stat_versions">Loading...</small></div>
         </div>
         <div class="status" id="stats_status">Refreshing every 5 seconds while the Stats tab is open.</div>
       </div>
@@ -497,6 +501,10 @@
           <div class="api-section">
             <h4>HTTP API Endpoints</h4>
             <ul>
+              <li><code>GET /api/device/get?id=1</code>: current state for one device profile</li>
+              <li><code>GET /api/device/get_all</code>: current state for all device profiles</li>
+              <li><code>POST /api/device/send</code>: send an HVAC command or custom command</li>
+              <li><code>POST /api/device/raw</code>: send raw IR without a saved device profile</li>
               <li><code>GET /api/status</code>: live runtime status, memory, network, counts, DINplug usage</li>
               <li><code>GET /api/meta</code>: UI metadata, capabilities, and limits</li>
               <li><code>GET /api/config</code>: current saved configuration JSON</li>
@@ -505,7 +513,8 @@
               <li><code>GET /api/wifi/scan</code>: available WiFi networks</li>
             </ul>
             <div class="code-toolbar"><button class="btn-outline btn-sm api-copy-btn" type="button" data-copy-target="api_http_curl">Copy curl Examples</button></div>
-            <div class="code-block" id="api_http_curl">curl http://ir-server.local/api/status
+            <div class="code-block" id="api_http_curl">curl http://ir-server.local/api/device/get?id=1
+curl http://ir-server.local/api/device/get_all
 curl http://ir-server.local/api/meta
 curl http://ir-server.local/api/config
 curl http://ir-server.local/api/monitor?limit=60
@@ -533,6 +542,23 @@ curl -X POST http://ir-server.local/api/ir/learn/cancel</div>
           </div>
 
           <div class="api-section">
+            <h4>HTTP Control Examples</h4>
+            <p>These routes mirror the telnet control API and support both standard HVAC profiles and custom command profiles.</p>
+            <div class="code-toolbar"><button class="btn-outline btn-sm api-copy-btn" type="button" data-copy-target="api_http_control_examples">Copy Control Examples</button></div>
+            <div class="code-block" id="api_http_control_examples">curl -X POST http://ir-server.local/api/device/send \
+  -H "Content-Type: application/json" \
+  -d '{"id":"1","power":"on","mode":"cool","temp":24,"fan":"auto","light":"true"}'
+
+curl -X POST http://ir-server.local/api/device/send \
+  -H "Content-Type: application/json" \
+  -d '{"id":"5","command_name":"power_on"}'
+
+curl -X POST http://ir-server.local/api/device/raw \
+  -H "Content-Type: application/json" \
+  -d '{"emitter":0,"encoding":"pronto","code":"0000 006D 0000 0022 ..."}'</div>
+          </div>
+
+          <div class="api-section">
             <h4>Response Examples</h4>
             <p>Standard HVAC devices return runtime state. Custom profiles return the registered command catalog plus the command sent most recently.</p>
             <div class="code-toolbar"><button class="btn-outline btn-sm api-copy-btn" type="button" data-copy-target="api_response_examples">Copy Responses</button></div>
@@ -557,6 +583,8 @@ curl -X POST http://ir-server.local/api/ir/learn/cancel</div>
             <p>This runs safe GET requests directly from your browser so you can inspect live responses without leaving the device UI.</p>
             <div class="api-tester-row">
               <select id="api_try_select" class="api-select">
+                <option value="/api/device/get_all">GET /api/device/get_all</option>
+                <option value="/api/device/get?id=1">GET /api/device/get?id=1</option>
                 <option value="/api/status">GET /api/status</option>
                 <option value="/api/meta">GET /api/meta</option>
                 <option value="/api/config">GET /api/config</option>
@@ -642,7 +670,8 @@ curl -X POST http://ir-server.local/api/ir/learn/cancel</div>
     let filters = { telnet: true, state: true, dinplug: true, ir: true };
     let monitorPollTimer = null;
     let statsPollTimer = null;
-    let activeTabName = 'monitor';
+    let activeTabName = 'stats';
+    let monitorLoadedOnce = false;
 
     // Tab switching
     function setActiveTab(tabName) {
@@ -662,8 +691,8 @@ curl -X POST http://ir-server.local/api/ir/learn/cancel</div>
     }
 
     function loadTabFromLocation() {
-      const tabName = (location.hash || '#monitor').slice(1);
-      setActiveTab(tabName || 'monitor');
+      const tabName = (location.hash || '#stats').slice(1);
+      setActiveTab(tabName || 'stats');
     }
 
     function formatBytes(bytes) {
@@ -705,6 +734,7 @@ curl -X POST http://ir-server.local/api/ir/learn/cancel</div>
       byId('stat_telnet').textContent = `${d.telnet_clients_active || 0} active`;
       byId('stat_dinplug').textContent = `${d.dinplug_status || '-'} | bindings ${d.dinplug_bindings_used || 0}/${d.dinplug_bindings_total || 0}`;
       byId('stat_counts').textContent = `${d.hvac_count || 0} devices, ${d.emitter_count || 0} emitters, ${d.temp_sensor_count || 0} sensors`;
+      byId('stat_versions').textContent = `FW ${d.firmware_version || '-'} | FS ${d.filesystem_version || '-'}${d.version_match ? '' : ' | mismatch'}`;
       byId('stats_status').textContent = 'Live stats updated.';
     }
 
@@ -789,6 +819,7 @@ curl -X POST http://ir-server.local/api/ir/learn/cancel</div>
     }
 
     async function loadMonitor() {
+      monitorLoadedOnce = true;
       const d = await J('/api/monitor?limit=60');
       enabled = !!d.enabled;
       filters = { ...filters, ...(d.filters || {}) };
@@ -813,8 +844,7 @@ curl -X POST http://ir-server.local/api/ir/learn/cancel</div>
 
     function syncMonitorPolling() {
       stopMonitorPolling();
-      if (activeTabName !== 'monitor' || document.hidden) return;
-      loadMonitor().catch(e => byId('mon_status').textContent = 'Load failed: ' + e);
+      if (activeTabName !== 'monitor' || document.hidden || !monitorLoadedOnce || !enabled) return;
       monitorPollTimer = setInterval(() => {
         loadMonitor().catch(e => byId('mon_status').textContent = 'Refresh failed: ' + e);
       }, 3000);
@@ -839,6 +869,10 @@ curl -X POST http://ir-server.local/api/ir/learn/cancel</div>
     }
 
     byId('toggle_btn').addEventListener('click', () => saveMonitorFilters(!enabled).catch(e => byId('mon_status').textContent = 'Toggle failed: ' + e));
+    byId('refresh_btn').addEventListener('click', () => loadMonitor().then(() => {
+      byId('mon_status').textContent = 'Monitor refreshed.';
+      syncMonitorPolling();
+    }).catch(e => byId('mon_status').textContent = 'Refresh failed: ' + e));
     byId('clear_btn').addEventListener('click', () => clearMonitor().catch(e => byId('mon_status').textContent = 'Clear failed: ' + e));
     ['filter_telnet', 'filter_state', 'filter_dinplug', 'filter_ir'].forEach((id) => {
       byId(id).addEventListener('change', () => saveMonitorFilters(enabled).catch(e => byId('mon_status').textContent = 'Filter update failed: ' + e));
@@ -846,6 +880,18 @@ curl -X POST http://ir-server.local/api/ir/learn/cancel</div>
     byId('copy_last_btn').addEventListener('click', () => {
       const codes = irCodes();
       copyText(codes.length ? codes[codes.length - 1] : '');
+    });
+    byId('copy_logs_btn').addEventListener('click', () => {
+      const text = byId('log_box').textContent || '';
+      if (!text.trim() || text.includes('Monitor is idle.')) {
+        byId('mon_status').textContent = 'No recent logs available.';
+        return;
+      }
+      navigator.clipboard.writeText(text).then(() => {
+        byId('mon_status').textContent = 'Recent logs copied to clipboard.';
+      }).catch(() => {
+        byId('mon_status').textContent = 'Clipboard copy failed.';
+      });
     });
     byId('copy_all_btn').addEventListener('click', () => {
       const codes = irCodes();
