@@ -192,6 +192,7 @@ unsigned long dinplugLastAttemptMs = 0;
 unsigned long dinplugLastKeepAliveMs = 0;
 unsigned long dinplugLastRxMs = 0;
 DNSServer dnsServer;
+bool dnsServerActive = false;
 Preferences preferences;
 bool telnetMonitorEnabled = true;
 bool monitorLogTelnetEnabled = true;
@@ -3681,6 +3682,15 @@ void setupWeb() {
       web.send(404, "application/json", "{\"ok\":false,\"error\":\"missing_version_json\"}");
     }
   });
+  web.on("/favicon.ico", HTTP_ANY, []() {
+    web.send(204, "text/plain", "");
+  });
+  web.on("/apple-touch-icon.png", HTTP_ANY, []() {
+    web.send(204, "text/plain", "");
+  });
+  web.on("/apple-touch-icon-precomposed.png", HTTP_ANY, []() {
+    web.send(204, "text/plain", "");
+  });
   web.onNotFound([]() {
     if (isApPortalMode()) {
       sendPortalRedirect();
@@ -4083,6 +4093,7 @@ String networkModeString() {
 void startWifi() {
   if (startEthernet()) {
     dnsServer.stop();
+    dnsServerActive = false;
     startMdns();
     return;
   }
@@ -4096,10 +4107,12 @@ void startWifi() {
     Serial.print("wifi: AP IP=");
     Serial.println(WiFi.softAPIP());
     dnsServer.start(53, "*", WiFi.softAPIP());
+    dnsServerActive = true;
     startMdns();
     return;
   }
   dnsServer.stop();
+  dnsServerActive = false;
   WiFi.mode(WIFI_STA);
   WiFi.setHostname(config.hostname.length() ? config.hostname.c_str() : kDefaultHostname);
   if (!config.wifi.dhcp) {
@@ -4119,6 +4132,8 @@ void startWifi() {
     Serial.println("wifi: connect failed, fallback to AP");
     Serial.print("wifi: AP IP=");
     Serial.println(WiFi.softAPIP());
+    dnsServer.start(53, "*", WiFi.softAPIP());
+    dnsServerActive = true;
   } else {
     Serial.print("wifi: connected IP=");
     Serial.println(WiFi.localIP());
@@ -4309,6 +4324,6 @@ void loop() {
   handleTemperatureSensors();
   handleHvacStatePersistence();
   handleIrReceiver();
-  dnsServer.processNextRequest();
+  if (dnsServerActive) dnsServer.processNextRequest();
   ArduinoOTA.handle();
 }
