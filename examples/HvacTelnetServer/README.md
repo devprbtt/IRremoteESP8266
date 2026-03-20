@@ -2,7 +2,7 @@
 
 ESP32 IR bridge with:
 - Telnet JSON API (one command per line, one JSON response).
-- Web UI for WiFi/Ethernet, emitters, devices, DINplug, monitor, API reference, and OTA.
+- Web UI for WiFi/Ethernet, emitters, devices, DINplug, diagnostics, API reference, and OTA.
 - Standard HVAC protocols (IRremoteESP8266 `IRac`) plus `CUSTOM` commands.
 - Optional IR receiver logging and IR learn flow for custom command capture.
 - Explicit firmware/filesystem version tracking with UI mismatch warning.
@@ -62,7 +62,7 @@ Configurable in `/config`:
 
 Runtime behavior:
 - Captures are printed to Serial.
-- Captures are added to the Monitor tab in `/system` when monitor logging is enabled.
+- Captures are available through the learn flow and diagnostics tooling. Live monitor logging is currently disabled in this build while runtime stability is being investigated.
 
 ## DS18B20 temperature sensors
 Configure DS18B20 in `/config`:
@@ -374,12 +374,14 @@ curl -X POST http://ir-server.local/api/config/save \
 ```
 
 ### Monitor API
-Get current monitor state and recent log lines:
-- `GET /api/monitor`
-- optional query: `limit=<1..80>`
+Live monitor logging is currently disabled in this build while runtime stability is being investigated.
+
+`GET /api/monitor` still exists for compatibility, but returns an unavailable/disabled response with no log lines.
 
 Returned fields:
 - `enabled`
+- `available`
+- `message`
 - `filters.telnet`
 - `filters.state`
 - `filters.dinplug`
@@ -389,16 +391,16 @@ Returned fields:
 Example:
 ```json
 {
-  "enabled": true,
+  "enabled": false,
+  "available": false,
+  "message": "Monitor logging is disabled in this build.",
   "filters": {
-    "telnet": true,
-    "state": true,
-    "dinplug": true,
+    "telnet": false,
+    "state": false,
+    "dinplug": false,
     "ir": false
   },
-  "lines": [
-    "[1234 ms] RX slot=0 from 192.168.1.2:54321 line={\"cmd\":\"list\"}"
-  ]
+  "lines": []
 }
 ```
 
@@ -411,22 +413,53 @@ Set monitor enabled state and category filters:
   - `dinplug=0|1`
   - `ir=0|1`
 
+Current behavior:
+- returns `ok: true`, but monitor logging remains disabled in this build
+
 Response:
 ```json
 {
   "ok": true,
   "enabled": true,
   "filters": {
-    "telnet": true,
-    "state": true,
+    "telnet": false,
+    "state": false,
     "dinplug": false,
-    "ir": true
+    "ir": false
   }
 }
 ```
 
 Clear the in-memory monitor log:
 - `POST /monitor/clear`
+
+### Persisted diagnostics
+Get the latest persisted diagnostics snapshot:
+- `GET /api/diagnostics`
+- add `?download=1` to force a `diagnostics.json` download in the browser
+
+What it contains:
+- `saved_at`
+- `uptime_ms`
+- `firmware_version`
+- `filesystem_version`
+- `boot_count`
+- `reset_reason`
+- `network_mode`
+- `ip`, `gateway`, `subnet`, `dns`
+- `wifi_rssi`
+- `heap_free`, `heap_min_free`, `heap_max_alloc`
+- `telnet_clients_active`
+- `dinplug_status`
+- `recent_lines`
+- `trend_samples`
+
+How it works:
+- the firmware keeps a small rolling snapshot in SPIFFS
+- it also records lightweight runtime trend samples once per minute
+- snapshots are debounced to avoid constant flash writes
+- this is meant to preserve the latest useful breadcrumbs if the board later locks up and you need to hard power-cycle it
+- it is not a full crash dump, so events that happen after the CPU has already stopped executing cannot be recorded
 
 Response:
 ```json
@@ -487,7 +520,7 @@ These are used by the web UI rather than third-party automation, but they are pa
 - `GET /api/device/get` and `GET /api/device/get_all` return the same state objects used by the telnet API.
 - `POST /api/device/send` and `POST /api/device/raw` reuse the same backend logic as telnet commands.
 - `POST /api/config/save` replaces the full config; it is not a partial patch endpoint.
-- `/api/monitor` is read-only; use `/monitor/toggle` and `/monitor/clear` to change monitor state.
+- `/api/monitor` is compatibility-only in this build and intentionally reports monitor logging as unavailable.
 - The web UI in `/system#api` includes copyable examples and a read-only API tester for safe endpoints.
 
 ## Home Assistant

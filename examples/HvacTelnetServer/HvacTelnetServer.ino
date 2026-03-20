@@ -12,6 +12,7 @@
 #include <ArduinoOTA.h>
 #include <Update.h>
 #include <Preferences.h>
+#include <esp_system.h>
 #include <time.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
@@ -43,16 +44,22 @@ static const uint16_t kMaxTelnetLineLength = 1024;
 static const uint16_t kIrRecvCaptureBufferSize = 1024;
 static const uint8_t kIrRecvTimeoutMs = 50;
 static const uint32_t kProntoDefaultFrequency = 38000;
+static const uint8_t kDiagnosticsLogLines = 60;
+static const unsigned long kDiagnosticsPersistDebounceMs = 10000UL;
+static const uint8_t kTrendHistoryCapacity = 24;
+static const unsigned long kTrendSampleIntervalMs = 60000UL;
 static const char *kFirmwareVersion = "0.2.0";
 static const char *kFilesystemVersionExpected = "0.2.0";
 
 static const char *kConfigPath = "/config.json";
 static const char *kHvacStatePath = "/hvac_state.json";
+static const char *kDiagnosticsPath = "/diagnostics.json";
 static const char *kVersionPath = "/version.json";
 static const char *kApSsid = "IR-Server-Setup";
 static const char *kDefaultHostname = "ir-server";
 static const char *kConfigPrefsNamespace = "hvaccfg";
 static const char *kConfigPrefsKey = "json";
+static const char *kDiagPrefsNamespace = "diag";
 static const uint8_t kDinplugModeOverrideKeep = 0;
 static const uint8_t kDinplugModeOverrideAuto = 1;
 static const uint8_t kDinplugModeOverrideCool = 2;
@@ -176,6 +183,15 @@ struct HvacRuntimeState {
   bool light = false;
 };
 
+struct TrendSample {
+  unsigned long uptimeMs = 0;
+  uint32_t freeHeap = 0;
+  uint32_t minFreeHeap = 0;
+  uint32_t maxAllocHeap = 0;
+  int32_t wifiRssi = 0;
+  uint8_t telnetClients = 0;
+};
+
 Config config;
 EmitterRuntime emitters[kMaxEmitters];
 HvacRuntimeState hvacStates[kMaxHvacs];
@@ -195,11 +211,11 @@ unsigned long dinplugLastRxMs = 0;
 DNSServer dnsServer;
 bool dnsServerActive = false;
 Preferences preferences;
-bool telnetMonitorEnabled = true;
-bool monitorLogTelnetEnabled = true;
-bool monitorLogStateEnabled = true;
-bool monitorLogDinplugEnabled = true;
-bool monitorLogIrEnabled = true;
+bool telnetMonitorEnabled = false;
+bool monitorLogTelnetEnabled = false;
+bool monitorLogStateEnabled = false;
+bool monitorLogDinplugEnabled = false;
+bool monitorLogIrEnabled = false;
 String serialConsoleBuffer;
 String telnetMonitorLog[kMonitorLogCapacity];
 uint16_t telnetMonitorLogStart = 0;
@@ -223,9 +239,17 @@ String irLearnError = "";
 unsigned long irLearnStartMs = 0;
 bool clockConfigured = false;
 String filesystemVersion = "unknown";
+uint32_t bootCount = 0;
+String resetReason = "unknown";
 bool hvacStatesDirty = false;
 unsigned long hvacStatesDirtySinceMs = 0;
 unsigned long telnetLastStateBroadcastMs = 0;
+bool diagnosticsDirty = false;
+unsigned long diagnosticsDirtySinceMs = 0;
+TrendSample trendHistory[kTrendHistoryCapacity];
+uint8_t trendHistoryStart = 0;
+uint8_t trendHistoryCount = 0;
+unsigned long lastTrendSampleMs = 0;
 
 // WT32-ETH01 defaults (LAN8720 PHY)
 static const uint8_t kEthPhyAddr = 1;
@@ -305,10 +329,13 @@ IPAddress currentGatewayIp();
 IPAddress currentSubnetMask();
 IPAddress currentDnsIp();
 void loadFilesystemVersion();
+String resetReasonToString(esp_reset_reason_t reason);
+void loadBootDiagnostics();
 String normalizeTimezoneOffset(const String &offsetIn);
 void configureClock();
 bool clockHasValidTime();
 String localTimeString();
+void handleNetworkRecovery();
 String normalizeCustomEncoding(const String &encodingIn);
 String customCommandsJson(const HvacConfig &h);
 const CustomCommandCode *findCustomCommandByName(const HvacConfig &h, const String &name);
@@ -323,6 +350,11 @@ void savePersistedHvacStates();
 void loadPersistedHvacStates();
 void handleHvacStatePersistence();
 void handleTelnetPeriodicStateBroadcast();
+void markDiagnosticsDirty();
+void savePersistedDiagnostics();
+void handleDiagnosticsPersistence();
+void handleApiDiagnostics();
+void sampleRuntimeTrends(bool force = false);
 
 // ---- Helpers ----
 
@@ -388,6 +420,44 @@ void loadFilesystemVersion() {
   if (!filesystemVersion.length()) filesystemVersion = "unknown";
   Serial.print("fs: version ");
   Serial.println(filesystemVersion);
+}
+
+String resetReasonToString(esp_reset_reason_t reason) {
+  switch (reason) {
+    case ESP_RST_UNKNOWN: return "unknown";
+    case ESP_RST_POWERON: return "power_on";
+    case ESP_RST_EXT: return "external_reset";
+    case ESP_RST_SW: return "software_reset";
+    case ESP_RST_PANIC: return "panic";
+    case ESP_RST_INT_WDT: return "interrupt_watchdog";
+    case ESP_RST_TASK_WDT: return "task_watchdog";
+    case ESP_RST_WDT: return "other_watchdog";
+    case ESP_RST_DEEPSLEEP: return "deep_sleep";
+    case ESP_RST_BROWNOUT: return "brownout";
+    case ESP_RST_SDIO: return "sdio";
+    default: return "other";
+  }
+}
+
+void loadBootDiagnostics() {
+  Preferences diagPrefs;
+  if (!diagPrefs.begin(kDiagPrefsNamespace, false)) {
+    resetReason = resetReasonToString(esp_reset_reason());
+    Serial.print("boot: reset_reason=");
+    Serial.println(resetReason);
+    markDiagnosticsDirty();
+    return;
+  }
+  bootCount = diagPrefs.getUInt("boot_count", 0) + 1;
+  resetReason = resetReasonToString(esp_reset_reason());
+  diagPrefs.putUInt("boot_count", bootCount);
+  diagPrefs.putString("reset_reason", resetReason);
+  diagPrefs.end();
+  Serial.print("boot: count=");
+  Serial.print(bootCount);
+  Serial.print(" reset_reason=");
+  Serial.println(resetReason);
+  markDiagnosticsDirty();
 }
 
 String normalizeTimezoneOffset(const String &offsetIn) {
@@ -477,18 +547,12 @@ float applyTempSensorPrecision(float value) {
 }
 
 void printMonitorStatus() {
-  Serial.print("monitor: telnet ");
-  Serial.println(telnetMonitorEnabled ? "on" : "off");
+  Serial.println("monitor: logging disabled in this build");
 }
 
 bool monitorCategoryEnabled(const String &categoryIn) {
-  String category = categoryIn;
-  category.toLowerCase();
-  if (category == "telnet") return monitorLogTelnetEnabled;
-  if (category == "state") return monitorLogStateEnabled;
-  if (category == "dinplug") return monitorLogDinplugEnabled;
-  if (category == "ir") return monitorLogIrEnabled;
-  return true;
+  (void)categoryIn;
+  return false;
 }
 
 const DinplugButtonBinding *getDinplugBinding(const HvacConfig &h, uint8_t idx) {
@@ -568,22 +632,7 @@ String dinplugConnectionStatus() {
 }
 
 void addMonitorLogEntry(const String &line) {
-  String entry;
-  String clockText = localTimeString();
-  if (clockText.length()) {
-    entry = "[" + clockText + "] [" + String(millis()) + " ms] ";
-  } else {
-    entry = "[" + String(millis()) + " ms] ";
-  }
-  entry += line;
-  if (telnetMonitorLogCount < kMonitorLogCapacity) {
-    uint16_t idx = (telnetMonitorLogStart + telnetMonitorLogCount) % kMonitorLogCapacity;
-    telnetMonitorLog[idx] = entry;
-    telnetMonitorLogCount++;
-    return;
-  }
-  telnetMonitorLog[telnetMonitorLogStart] = entry;
-  telnetMonitorLogStart = (telnetMonitorLogStart + 1) % kMonitorLogCapacity;
+  (void)line;
 }
 
 void clearMonitorLog() {
@@ -598,12 +647,10 @@ void handleConsoleCommand(const String &line) {
   if (!cmd.length()) return;
 
   if (cmd == "monitor on" || cmd == "telnet monitor on") {
-    telnetMonitorEnabled = true;
     printMonitorStatus();
     return;
   }
   if (cmd == "monitor off" || cmd == "telnet monitor off") {
-    telnetMonitorEnabled = false;
     printMonitorStatus();
     return;
   }
@@ -612,10 +659,7 @@ void handleConsoleCommand(const String &line) {
     return;
   }
   if (cmd == "monitor help" || cmd == "help") {
-    Serial.println("monitor commands:");
-    Serial.println("  monitor on");
-    Serial.println("  monitor off");
-    Serial.println("  monitor status");
+    Serial.println("monitor logging is disabled in this build");
     return;
   }
   Serial.print("monitor: unknown command: ");
@@ -1427,6 +1471,7 @@ void clearPersistedData() {
 
   if (SPIFFS.exists(kConfigPath)) SPIFFS.remove(kConfigPath);
   if (SPIFFS.exists(kHvacStatePath)) SPIFFS.remove(kHvacStatePath);
+  if (SPIFFS.exists(kDiagnosticsPath)) SPIFFS.remove(kDiagnosticsPath);
 
   clearConfig();
   initHvacRuntimeStates();
@@ -1910,6 +1955,35 @@ void markHvacStatesDirty() {
   hvacStatesDirtySinceMs = millis();
 }
 
+void markDiagnosticsDirty() {
+  diagnosticsDirty = true;
+  diagnosticsDirtySinceMs = millis();
+}
+
+void sampleRuntimeTrends(bool force) {
+  unsigned long now = millis();
+  if (!force && (now - lastTrendSampleMs) < kTrendSampleIntervalMs) return;
+  lastTrendSampleMs = now;
+
+  TrendSample sample;
+  sample.uptimeMs = now;
+  sample.freeHeap = ESP.getFreeHeap();
+  sample.minFreeHeap = ESP.getMinFreeHeap();
+  sample.maxAllocHeap = ESP.getMaxAllocHeap();
+  sample.wifiRssi = WiFi.isConnected() ? WiFi.RSSI() : 0;
+  sample.telnetClients = activeTelnetClientCount();
+
+  if (trendHistoryCount < kTrendHistoryCapacity) {
+    uint8_t idx = (trendHistoryStart + trendHistoryCount) % kTrendHistoryCapacity;
+    trendHistory[idx] = sample;
+    trendHistoryCount++;
+  } else {
+    trendHistory[trendHistoryStart] = sample;
+    trendHistoryStart = (trendHistoryStart + 1) % kTrendHistoryCapacity;
+  }
+  markDiagnosticsDirty();
+}
+
 void savePersistedHvacStates() {
   JsonDocument doc;
   JsonArray hv = doc["hvacs"].to<JsonArray>();
@@ -1996,11 +2070,96 @@ void loadPersistedHvacStates() {
   }
 }
 
+void savePersistedDiagnostics() {
+  sampleRuntimeTrends(true);
+  JsonDocument doc;
+  String nowText = localTimeString();
+  doc["saved_at"] = nowText;
+  doc["uptime_ms"] = millis();
+  doc["firmware_version"] = kFirmwareVersion;
+  doc["filesystem_version"] = filesystemVersion;
+  doc["filesystem_version_expected"] = kFilesystemVersionExpected;
+  doc["version_match"] = (filesystemVersion == String(kFilesystemVersionExpected));
+  doc["boot_count"] = bootCount;
+  doc["reset_reason"] = resetReason;
+  doc["network_mode"] = networkModeString();
+  doc["ip"] = networkLocalIp().toString();
+  doc["gateway"] = currentGatewayIp().toString();
+  doc["subnet"] = currentSubnetMask().toString();
+  doc["dns"] = currentDnsIp().toString();
+  doc["hostname"] = config.hostname.length() ? config.hostname : kDefaultHostname;
+  doc["timezone"] = normalizeTimezoneOffset(config.timezone);
+  doc["wifi_rssi"] = WiFi.isConnected() ? WiFi.RSSI() : 0;
+  doc["time_synced"] = clockHasValidTime();
+  doc["local_time"] = nowText;
+  doc["heap_free"] = ESP.getFreeHeap();
+  doc["heap_min_free"] = ESP.getMinFreeHeap();
+  doc["heap_max_alloc"] = ESP.getMaxAllocHeap();
+  doc["telnet_port"] = config.telnetPort;
+  doc["telnet_clients_active"] = activeTelnetClientCount();
+  doc["dinplug_status"] = dinplugConnectionStatus();
+  doc["dinplug_bindings_used"] = dinplugBindingCount;
+  doc["dinplug_bindings_total"] = kMaxDinplugBindingsTotal;
+  doc["hvac_count"] = config.hvacCount;
+  doc["emitter_count"] = config.emitterCount;
+  doc["temp_sensor_count"] = tempSensorCount;
+  doc["ir_receiver_enabled"] = config.irReceiver.enabled;
+  doc["ir_receiver_gpio"] = config.irReceiver.gpio;
+
+  JsonArray telnetClientsJson = doc["telnet_clients"].to<JsonArray>();
+  for (uint8_t i = 0; i < kMaxTelnetClients; i++) {
+    WiFiClient &c = telnetClients[i];
+    if (!c || !c.connected()) continue;
+    JsonObject tc = telnetClientsJson.add<JsonObject>();
+    tc["slot"] = i;
+    tc["ip"] = c.remoteIP().toString();
+    tc["port"] = c.remotePort();
+  }
+
+  JsonArray lines = doc["recent_lines"].to<JsonArray>();
+  uint16_t limit = kDiagnosticsLogLines;
+  if (limit > telnetMonitorLogCount) limit = telnetMonitorLogCount;
+  uint16_t startOffset = telnetMonitorLogCount - limit;
+  for (uint16_t i = startOffset; i < telnetMonitorLogCount; i++) {
+    uint16_t idx = (telnetMonitorLogStart + i) % kMonitorLogCapacity;
+    lines.add(telnetMonitorLog[idx]);
+  }
+
+  JsonArray trends = doc["trend_samples"].to<JsonArray>();
+  for (uint8_t i = 0; i < trendHistoryCount; i++) {
+    uint8_t idx = (trendHistoryStart + i) % kTrendHistoryCapacity;
+    JsonObject t = trends.add<JsonObject>();
+    t["uptime_ms"] = trendHistory[idx].uptimeMs;
+    t["heap_free"] = trendHistory[idx].freeHeap;
+    t["heap_min_free"] = trendHistory[idx].minFreeHeap;
+    t["heap_max_alloc"] = trendHistory[idx].maxAllocHeap;
+    t["wifi_rssi"] = trendHistory[idx].wifiRssi;
+    t["telnet_clients_active"] = trendHistory[idx].telnetClients;
+  }
+  doc["monitor_logging_enabled"] = false;
+
+  File f = SPIFFS.open(kDiagnosticsPath, FILE_WRITE);
+  if (!f) {
+    Serial.println("diag: failed to open for write");
+    return;
+  }
+  serializeJson(doc, f);
+  f.close();
+  diagnosticsDirty = false;
+}
+
 void handleHvacStatePersistence() {
   if (!hvacStatesDirty) return;
   unsigned long now = millis();
   if ((now - hvacStatesDirtySinceMs) < kHvacStatePersistDebounceMs) return;
   savePersistedHvacStates();
+}
+
+void handleDiagnosticsPersistence() {
+  if (!diagnosticsDirty) return;
+  unsigned long now = millis();
+  if ((now - diagnosticsDirtySinceMs) < kDiagnosticsPersistDebounceMs) return;
+  savePersistedDiagnostics();
 }
 
 void handleTelnetPeriodicStateBroadcast() {
@@ -2815,6 +2974,8 @@ void handleApiStatus() {
   doc["filesystem_version"] = filesystemVersion;
   doc["filesystem_version_expected"] = kFilesystemVersionExpected;
   doc["version_match"] = (filesystemVersion == String(kFilesystemVersionExpected));
+  doc["boot_count"] = bootCount;
+  doc["reset_reason"] = resetReason;
   doc["network_mode"] = networkModeString();
   doc["ip"] = networkLocalIp().toString();
   doc["gateway"] = currentGatewayIp().toString();
@@ -2834,6 +2995,8 @@ void handleApiStatus() {
   doc["heap_free"] = ESP.getFreeHeap();
   doc["heap_min_free"] = ESP.getMinFreeHeap();
   doc["heap_max_alloc"] = ESP.getMaxAllocHeap();
+  doc["trend_samples_count"] = trendHistoryCount;
+  doc["trend_sample_interval_sec"] = (kTrendSampleIntervalMs / 1000UL);
   doc["telnet_clients_active"] = activeTelnetClientCount();
   JsonArray telnetClientsJson = doc["telnet_clients"].to<JsonArray>();
   for (uint8_t i = 0; i < kMaxTelnetClients; i++) {
@@ -2858,6 +3021,7 @@ void handleApiStatus() {
   }
   doc["ethernet_enabled"] = config.eth.enabled;
   doc["wifi_rssi"] = WiFi.isConnected() ? WiFi.RSSI() : 0;
+  doc["monitor_logging_enabled"] = false;
   doc["time_synced"] = clockHasValidTime();
   doc["local_time"] = localTimeString();
   String out;
@@ -2905,6 +3069,7 @@ void handleApiMeta() {
   doc["max_dinplug_bindings_total"] = kMaxDinplugBindingsTotal;
   doc["dinplug_bindings_used"] = dinplugBindingCount;
   doc["dinplug_bindings_available"] = kMaxDinplugBindingsTotal - dinplugBindingCount;
+  doc["monitor_logging_enabled"] = false;
   doc["max_temp_sensors"] = kMaxTempSensors;
   doc["max_emitters"] = kMaxEmitters;
   doc["max_hvacs"] = kMaxHvacs;
@@ -3147,6 +3312,8 @@ bool processCommand(JsonDocument &doc, JsonDocument &resp, int8_t sourceTelnetSl
     resp["filesystem_version"] = filesystemVersion;
     resp["filesystem_version_expected"] = kFilesystemVersionExpected;
     resp["version_match"] = (filesystemVersion == String(kFilesystemVersionExpected));
+    resp["boot_count"] = bootCount;
+    resp["reset_reason"] = resetReason;
     resp["network_mode"] = networkModeString();
     resp["ip"] = networkLocalIp().toString();
     resp["hostname"] = config.hostname.length() ? config.hostname : kDefaultHostname;
@@ -3159,7 +3326,10 @@ bool processCommand(JsonDocument &doc, JsonDocument &resp, int8_t sourceTelnetSl
     resp["heap_free"] = ESP.getFreeHeap();
     resp["heap_min_free"] = ESP.getMinFreeHeap();
     resp["heap_max_alloc"] = ESP.getMaxAllocHeap();
+    resp["trend_samples_count"] = trendHistoryCount;
+    resp["trend_sample_interval_sec"] = (kTrendSampleIntervalMs / 1000UL);
     resp["wifi_rssi"] = WiFi.isConnected() ? WiFi.RSSI() : 0;
+    resp["monitor_logging_enabled"] = false;
     resp["time_synced"] = clockHasValidTime();
     resp["local_time"] = localTimeString();
     return true;
@@ -3414,31 +3584,37 @@ void handleMonitorPage() {
 
 void handleApiMonitor() {
   if (!checkAuth()) { requestAuth(); return; }
-  uint16_t limit = kMonitorLogCapacity;
-  if (web.hasArg("limit")) {
-    long requested = web.arg("limit").toInt();
-    if (requested > 0) {
-      limit = (uint16_t)requested;
-      if (limit > 80) limit = 80;
-    }
-  }
-  if (limit > telnetMonitorLogCount) limit = telnetMonitorLogCount;
   JsonDocument doc;
-  doc["enabled"] = telnetMonitorEnabled;
+  doc["enabled"] = false;
+  doc["available"] = false;
+  doc["message"] = "Monitor logging is disabled in this build.";
   JsonObject filters = doc["filters"].to<JsonObject>();
-  filters["telnet"] = monitorLogTelnetEnabled;
-  filters["state"] = monitorLogStateEnabled;
-  filters["dinplug"] = monitorLogDinplugEnabled;
-  filters["ir"] = monitorLogIrEnabled;
-  JsonArray lines = doc["lines"].to<JsonArray>();
-  uint16_t startOffset = telnetMonitorLogCount - limit;
-  for (uint16_t i = startOffset; i < telnetMonitorLogCount; i++) {
-    uint16_t idx = (telnetMonitorLogStart + i) % kMonitorLogCapacity;
-    lines.add(telnetMonitorLog[idx]);
-  }
+  filters["telnet"] = false;
+  filters["state"] = false;
+  filters["dinplug"] = false;
+  filters["ir"] = false;
+  doc["lines"].to<JsonArray>();
   String out;
   serializeJson(doc, out);
   web.send(200, "application/json", out);
+}
+
+void handleApiDiagnostics() {
+  if (!checkAuth()) { requestAuth(); return; }
+  if (!SPIFFS.exists(kDiagnosticsPath)) {
+    web.send(404, "application/json", "{\"ok\":false,\"error\":\"diagnostics_unavailable\"}");
+    return;
+  }
+  File f = SPIFFS.open(kDiagnosticsPath, FILE_READ);
+  if (!f) {
+    web.send(500, "application/json", "{\"ok\":false,\"error\":\"diagnostics_open_failed\"}");
+    return;
+  }
+  if (web.hasArg("download")) {
+    web.sendHeader("Content-Disposition", "attachment; filename=\"diagnostics.json\"");
+  }
+  web.streamFile(f, "application/json");
+  f.close();
 }
 
 void handleMonitorClear() {
@@ -3453,38 +3629,17 @@ void handleMonitorClear() {
 
 void handleMonitorToggle() {
   if (!checkAuth()) { requestAuth(); return; }
-  String enabled = web.arg("enabled");
-  enabled.toLowerCase();
-  telnetMonitorEnabled = (enabled == "1" || enabled == "true" || enabled == "on");
-  if (web.hasArg("telnet")) {
-    String value = web.arg("telnet");
-    value.toLowerCase();
-    monitorLogTelnetEnabled = (value == "1" || value == "true" || value == "on");
-  }
-  if (web.hasArg("state")) {
-    String value = web.arg("state");
-    value.toLowerCase();
-    monitorLogStateEnabled = (value == "1" || value == "true" || value == "on");
-  }
-  if (web.hasArg("dinplug")) {
-    String value = web.arg("dinplug");
-    value.toLowerCase();
-    monitorLogDinplugEnabled = (value == "1" || value == "true" || value == "on");
-  }
-  if (web.hasArg("ir")) {
-    String value = web.arg("ir");
-    value.toLowerCase();
-    monitorLogIrEnabled = (value == "1" || value == "true" || value == "on");
-  }
   printMonitorStatus();
   JsonDocument doc;
   doc["ok"] = true;
-  doc["enabled"] = telnetMonitorEnabled;
+  doc["enabled"] = false;
+  doc["available"] = false;
+  doc["message"] = "Monitor logging is disabled in this build.";
   JsonObject filters = doc["filters"].to<JsonObject>();
-  filters["telnet"] = monitorLogTelnetEnabled;
-  filters["state"] = monitorLogStateEnabled;
-  filters["dinplug"] = monitorLogDinplugEnabled;
-  filters["ir"] = monitorLogIrEnabled;
+  filters["telnet"] = false;
+  filters["state"] = false;
+  filters["dinplug"] = false;
+  filters["ir"] = false;
   String out;
   serializeJson(doc, out);
   web.send(200, "application/json", out);
@@ -3625,6 +3780,7 @@ void setupWeb() {
     web.send(302, "text/plain", "");
   });
   web.on("/api/monitor", HTTP_GET, handleApiMonitor);
+  web.on("/api/diagnostics", HTTP_GET, handleApiDiagnostics);
   web.on("/monitor/clear", HTTP_POST, handleMonitorClear);
   web.on("/monitor/toggle", HTTP_POST, handleMonitorToggle);
   web.on("/api/ir/learn/start", HTTP_POST, handleIrLearnStart);
@@ -4153,6 +4309,43 @@ void startWifi() {
   }
 }
 
+void handleNetworkRecovery() {
+  static wl_status_t lastWifiStatus = WL_IDLE_STATUS;
+  static unsigned long lastRecoveryAttemptMs = 0;
+
+  const wl_status_t wifiStatus = WiFi.status();
+  if (WiFi.getMode() == WIFI_STA && wifiStatus == WL_CONNECTED && lastWifiStatus != WL_CONNECTED) {
+    Serial.print("wifi: reconnected IP=");
+    Serial.println(WiFi.localIP());
+    if (telnetMonitorEnabled && monitorLogStateEnabled) addMonitorLogEntry("wifi: reconnected ip=" + WiFi.localIP().toString());
+    startMdns();
+  } else if (WiFi.getMode() == WIFI_STA && wifiStatus != WL_CONNECTED && lastWifiStatus == WL_CONNECTED) {
+    Serial.print("wifi: disconnected status=");
+    Serial.println(static_cast<int>(wifiStatus));
+    if (telnetMonitorEnabled && monitorLogStateEnabled) addMonitorLogEntry("wifi: disconnected status=" + String(static_cast<int>(wifiStatus)));
+  }
+  lastWifiStatus = wifiStatus;
+
+  if (ethernetUp && ETH.linkUp() && ETH.localIP() != IPAddress()) return;
+  if (config.wifi.ssid.length() == 0) return;
+  if (WiFi.getMode() != WIFI_STA) return;
+  if (wifiStatus == WL_CONNECTED) return;
+
+  const unsigned long now = millis();
+  if ((now - lastRecoveryAttemptMs) < 15000UL) return;
+  lastRecoveryAttemptMs = now;
+
+  Serial.print("wifi: attempting recovery status=");
+  Serial.println(static_cast<int>(wifiStatus));
+  if (telnetMonitorEnabled && monitorLogStateEnabled) addMonitorLogEntry("wifi: attempting recovery status=" + String(static_cast<int>(wifiStatus)));
+
+  WiFi.disconnect(false, false);
+  if (!config.wifi.dhcp) {
+    WiFi.config(config.wifi.ip, config.wifi.gateway, config.wifi.subnet, config.wifi.dns);
+  }
+  WiFi.begin(config.wifi.ssid.c_str(), config.wifi.password.c_str());
+}
+
 void setupTemperatureSensors() {
   tempSensorCount = 0;
   tempLastReadMs = 0;
@@ -4302,6 +4495,7 @@ void setup() {
     Serial.println("fs: SPIFFS mounted");
     loadFilesystemVersion();
   }
+  loadBootDiagnostics();
   loadConfig();
   loadPersistedHvacStates();
   setupTemperatureSensors();
@@ -4323,8 +4517,10 @@ void setup() {
   if (config.dinplug.autoConnect && config.dinplug.gatewayHost.length() > 0) {
     ensureDinplugConnected(true);
   }
+  sampleRuntimeTrends(true);
+  savePersistedDiagnostics();
   printMonitorStatus();
-  Serial.println("monitor: use 'monitor on|off|status' via serial terminal");
+  Serial.println("monitor: disabled while runtime stability is under investigation");
 }
 
 void loop() {
@@ -4333,8 +4529,11 @@ void loop() {
   handleTelnet();
   handleTelnetPeriodicStateBroadcast();
   handleDinplug();
+  handleNetworkRecovery();
   handleTemperatureSensors();
+  sampleRuntimeTrends();
   handleHvacStatePersistence();
+  handleDiagnosticsPersistence();
   handleIrReceiver();
   if (dnsServerActive) dnsServer.processNextRequest();
   ArduinoOTA.handle();

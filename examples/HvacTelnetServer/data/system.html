@@ -421,26 +421,20 @@
     <!-- MONITOR TAB -->
     <div id="tab-monitor" class="tab-content">
       <div class="card">
-        <h3 class="card-title">Live Log</h3>
+        <h3 class="card-title">Monitor Logging Disabled</h3>
         <div class="row">
-          <div class="status-pill"><span id="dot" class="status-dot"></span><span id="mon_state">Loading...</span></div>
-          <button class="btn-outline btn-sm" type="button" id="refresh_btn">Refresh</button>
-          <button class="btn-secondary btn-sm" type="button" id="toggle_btn">Toggle</button>
-          <button class="btn-outline btn-sm" type="button" id="clear_btn">Clear</button>
+          <div class="status-pill"><span id="dot" class="status-dot"></span><span id="mon_state">Disabled for stability testing</span></div>
+          <button class="btn-outline btn-sm" type="button" id="refresh_btn">Refresh Status</button>
+          <button class="btn-outline btn-sm" type="button" id="toggle_btn" disabled>Disabled</button>
+          <button class="btn-outline btn-sm" type="button" id="clear_btn" disabled>Disabled</button>
         </div>
-        <div class="filters">
-          <label class="filter-chip"><input id="filter_telnet" type="checkbox"><span>Telnet</span></label>
-          <label class="filter-chip"><input id="filter_state" type="checkbox"><span>State</span></label>
-          <label class="filter-chip"><input id="filter_dinplug" type="checkbox"><span>DINplug</span></label>
-          <label class="filter-chip"><input id="filter_ir" type="checkbox"><span>IR</span></label>
-        </div>
-        <div id="log_box" class="terminal">Monitor is idle. Open this tab and click Refresh if you want to load the log.</div>
+        <div id="log_box" class="terminal">Live monitor logging is disabled in this build so we can rule it out as a source of instability. Use Download Diagnostics in the Backup tab to inspect persisted trend samples and the latest saved health snapshot.</div>
         <div class="row" style="margin-top:12px;">
-          <button class="btn-outline btn-sm" type="button" id="copy_logs_btn">Copy Recent Logs</button>
-          <button class="btn-outline btn-sm" type="button" id="copy_last_btn">Copy Last IR</button>
-          <button class="btn-outline btn-sm" type="button" id="copy_all_btn">Copy All IR</button>
+          <button class="btn-outline btn-sm" type="button" id="copy_logs_btn">Copy Status Note</button>
+          <button class="btn-outline btn-sm" type="button" id="copy_last_btn" disabled>IR Disabled</button>
+          <button class="btn-outline btn-sm" type="button" id="copy_all_btn" disabled>IR Disabled</button>
         </div>
-        <div class="status" id="mon_status">Ready</div>
+        <div class="status" id="mon_status">Monitor logging is disabled in this build.</div>
       </div>
     </div>
 
@@ -459,6 +453,8 @@
           <div class="link-card">DINplug<small id="stat_dinplug">Loading...</small></div>
           <div class="link-card">Config Counts<small id="stat_counts">Loading...</small></div>
           <div class="link-card">Versions<small id="stat_versions">Loading...</small></div>
+          <div class="link-card">Last Reset<small id="stat_reset">Loading...</small></div>
+          <div class="link-card">Trend Sampling<small id="stat_trends">Loading...</small></div>
         </div>
         <div class="status" id="stats_status">Refreshing every 5 seconds while the Stats tab is open.</div>
       </div>
@@ -471,7 +467,7 @@
         <div class="api-grid">
           <div class="api-section">
             <h4>Overview</h4>
-            <p>IR Server Telnet exposes two integration paths: a telnet JSON command socket for runtime control and a small HTTP API for configuration, status, monitor, and IR learning.</p>
+            <p>IR Server Telnet exposes two integration paths: a telnet JSON command socket for runtime control and a small HTTP API for configuration, status, diagnostics, and IR learning.</p>
             <div>
               <span class="api-endpoint">TELNET :4998</span>
               <span class="api-endpoint">HTTP /api/*</span>
@@ -509,7 +505,7 @@
               <li><code>GET /api/meta</code>: UI metadata, capabilities, and limits</li>
               <li><code>GET /api/config</code>: current saved configuration JSON</li>
               <li><code>POST /api/config/save</code>: replace saved configuration JSON</li>
-              <li><code>GET /api/monitor?limit=60</code>: monitor state and recent lines</li>
+              <li><code>GET /api/diagnostics</code>: latest persisted diagnostics snapshot with trend history</li>
               <li><code>GET /api/wifi/scan</code>: available WiFi networks</li>
             </ul>
             <div class="code-toolbar"><button class="btn-outline btn-sm api-copy-btn" type="button" data-copy-target="api_http_curl">Copy curl Examples</button></div>
@@ -517,7 +513,7 @@
 curl http://ir-server.local/api/device/get_all
 curl http://ir-server.local/api/meta
 curl http://ir-server.local/api/config
-curl http://ir-server.local/api/monitor?limit=60
+curl http://ir-server.local/api/diagnostics
 curl http://ir-server.local/api/wifi/scan
 curl -X POST http://ir-server.local/api/config/save \
   -H "Content-Type: application/json" \
@@ -588,7 +584,7 @@ curl -X POST http://ir-server.local/api/device/raw \
                 <option value="/api/status">GET /api/status</option>
                 <option value="/api/meta">GET /api/meta</option>
                 <option value="/api/config">GET /api/config</option>
-                <option value="/api/monitor?limit=20">GET /api/monitor?limit=20</option>
+                <option value="/api/diagnostics">GET /api/diagnostics</option>
                 <option value="/api/wifi/scan">GET /api/wifi/scan</option>
               </select>
               <button class="btn-secondary btn-sm" type="button" id="api_try_btn">Run</button>
@@ -626,6 +622,7 @@ curl -X POST http://ir-server.local/api/device/raw \
         <div class="link-grid">
           <a class="link-card" href="/config/download">Download Config<small>Save current config JSON</small></a>
           <a class="link-card" href="#" id="upload_config_link">Restore Config<small>Upload saved config file</small></a>
+          <a class="link-card" href="/api/diagnostics?download=1">Download Diagnostics<small>Latest persisted logs and runtime health snapshot</small></a>
         </div>
       </div>
       <div class="card" id="restore_card" style="display:none;">
@@ -735,6 +732,8 @@ curl -X POST http://ir-server.local/api/device/raw \
       byId('stat_dinplug').textContent = `${d.dinplug_status || '-'} | bindings ${d.dinplug_bindings_used || 0}/${d.dinplug_bindings_total || 0}`;
       byId('stat_counts').textContent = `${d.hvac_count || 0} devices, ${d.emitter_count || 0} emitters, ${d.temp_sensor_count || 0} sensors`;
       byId('stat_versions').textContent = `FW ${d.firmware_version || '-'} | FS ${d.filesystem_version || '-'}${d.version_match ? '' : ' | mismatch'}`;
+      byId('stat_reset').textContent = `${d.reset_reason || '-'} | boot #${d.boot_count || 0}`;
+      byId('stat_trends').textContent = `${d.trend_samples_count || 0} samples | every ${d.trend_sample_interval_sec || 60}s`;
       byId('stats_status').textContent = 'Live stats updated.';
     }
 
@@ -820,19 +819,14 @@ curl -X POST http://ir-server.local/api/device/raw \
 
     async function loadMonitor() {
       monitorLoadedOnce = true;
-      const d = await J('/api/monitor?limit=60');
-      enabled = !!d.enabled;
-      filters = { ...filters, ...(d.filters || {}) };
-      lines = d.lines || [];
-      byId('mon_state').textContent = enabled ? 'Monitor enabled' : 'Monitor disabled';
-      byId('dot').classList.toggle('active', enabled);
-      byId('filter_telnet').checked = !!filters.telnet;
-      byId('filter_state').checked = !!filters.state;
-      byId('filter_dinplug').checked = !!filters.dinplug;
-      byId('filter_ir').checked = !!filters.ir;
+      enabled = false;
+      lines = [];
+      byId('mon_state').textContent = 'Disabled for stability testing';
+      byId('dot').classList.toggle('active', false);
       const log = byId('log_box');
-      log.textContent = lines.join('\n');
-      log.scrollTop = log.scrollHeight;
+      log.textContent = 'Live monitor logging is disabled in this build so we can rule it out as a source of instability. Use Download Diagnostics in the Backup tab to inspect persisted trend samples and the latest saved health snapshot.';
+      byId('mon_status').textContent = 'Monitor logging is disabled in this build.';
+      log.scrollTop = 0;
     }
 
     function stopMonitorPolling() {
@@ -845,27 +839,16 @@ curl -X POST http://ir-server.local/api/device/raw \
     function syncMonitorPolling() {
       stopMonitorPolling();
       if (activeTabName !== 'monitor' || document.hidden || !monitorLoadedOnce || !enabled) return;
-      monitorPollTimer = setInterval(() => {
-        loadMonitor().catch(e => byId('mon_status').textContent = 'Refresh failed: ' + e);
-      }, 3000);
     }
 
     async function saveMonitorFilters(nextEnabled = enabled) {
-      const body = new URLSearchParams({
-        enabled: nextEnabled ? '1' : '0',
-        telnet: byId('filter_telnet').checked ? '1' : '0',
-        state: byId('filter_state').checked ? '1' : '0',
-        dinplug: byId('filter_dinplug').checked ? '1' : '0',
-        ir: byId('filter_ir').checked ? '1' : '0'
-      });
-      await fetch('/monitor/toggle', { method: 'POST', body });
+      enabled = false;
       await loadMonitor();
     }
 
     async function clearMonitor() {
-      await fetch('/monitor/clear', { method: 'POST' });
       await loadMonitor();
-      byId('mon_status').textContent = 'Log cleared.';
+      byId('mon_status').textContent = 'Monitor logging is disabled in this build.';
     }
 
     byId('toggle_btn').addEventListener('click', () => saveMonitorFilters(!enabled).catch(e => byId('mon_status').textContent = 'Toggle failed: ' + e));
@@ -874,9 +857,6 @@ curl -X POST http://ir-server.local/api/device/raw \
       syncMonitorPolling();
     }).catch(e => byId('mon_status').textContent = 'Refresh failed: ' + e));
     byId('clear_btn').addEventListener('click', () => clearMonitor().catch(e => byId('mon_status').textContent = 'Clear failed: ' + e));
-    ['filter_telnet', 'filter_state', 'filter_dinplug', 'filter_ir'].forEach((id) => {
-      byId(id).addEventListener('change', () => saveMonitorFilters(enabled).catch(e => byId('mon_status').textContent = 'Filter update failed: ' + e));
-    });
     byId('copy_last_btn').addEventListener('click', () => {
       const codes = irCodes();
       copyText(codes.length ? codes[codes.length - 1] : '');
