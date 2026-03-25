@@ -30,7 +30,7 @@ static const uint8_t kMaxHvacs = 32;
 static const uint8_t kMaxCustomTemps = 16;
 static const uint8_t kMaxCustomCommands = 16;
 static const uint16_t kDefaultTelnetPort = 4998;
-static const uint16_t kMonitorLogCapacity = 200;
+static const uint16_t kMonitorLogCapacity = 40;
 static const uint16_t kDinplugPort = 23;
 static const unsigned long kDinplugReconnectIntervalMs = 5000;
 static const unsigned long kDinplugKeepAliveIntervalMs = 10000;
@@ -44,7 +44,7 @@ static const uint16_t kMaxTelnetLineLength = 1024;
 static const uint16_t kIrRecvCaptureBufferSize = 1024;
 static const uint8_t kIrRecvTimeoutMs = 50;
 static const uint32_t kProntoDefaultFrequency = 38000;
-static const uint8_t kDiagnosticsLogLines = 60;
+static const uint8_t kDiagnosticsLogLines = 20;
 static const unsigned long kDiagnosticsPersistDebounceMs = 10000UL;
 static const uint8_t kTrendHistoryCapacity = 24;
 static const unsigned long kTrendSampleIntervalMs = 60000UL;
@@ -211,11 +211,11 @@ unsigned long dinplugLastRxMs = 0;
 DNSServer dnsServer;
 bool dnsServerActive = false;
 Preferences preferences;
-bool telnetMonitorEnabled = false;
-bool monitorLogTelnetEnabled = false;
-bool monitorLogStateEnabled = false;
-bool monitorLogDinplugEnabled = false;
-bool monitorLogIrEnabled = false;
+bool telnetMonitorEnabled = true;
+bool monitorLogTelnetEnabled = true;
+bool monitorLogStateEnabled = true;
+bool monitorLogDinplugEnabled = true;
+bool monitorLogIrEnabled = true;
 String serialConsoleBuffer;
 String telnetMonitorLog[kMonitorLogCapacity];
 uint16_t telnetMonitorLogStart = 0;
@@ -547,12 +547,18 @@ float applyTempSensorPrecision(float value) {
 }
 
 void printMonitorStatus() {
-  Serial.println("monitor: logging disabled in this build");
+  Serial.print("monitor: telnet ");
+  Serial.println(telnetMonitorEnabled ? "on" : "off");
 }
 
 bool monitorCategoryEnabled(const String &categoryIn) {
-  (void)categoryIn;
-  return false;
+  String category = categoryIn;
+  category.toLowerCase();
+  if (category == "telnet") return monitorLogTelnetEnabled;
+  if (category == "state") return monitorLogStateEnabled;
+  if (category == "dinplug") return monitorLogDinplugEnabled;
+  if (category == "ir") return monitorLogIrEnabled;
+  return true;
 }
 
 const DinplugButtonBinding *getDinplugBinding(const HvacConfig &h, uint8_t idx) {
@@ -632,7 +638,22 @@ String dinplugConnectionStatus() {
 }
 
 void addMonitorLogEntry(const String &line) {
-  (void)line;
+  String entry;
+  String clockText = localTimeString();
+  if (clockText.length()) {
+    entry = "[" + clockText + "] [" + String(millis()) + " ms] ";
+  } else {
+    entry = "[" + String(millis()) + " ms] ";
+  }
+  entry += line;
+  if (telnetMonitorLogCount < kMonitorLogCapacity) {
+    uint16_t idx = (telnetMonitorLogStart + telnetMonitorLogCount) % kMonitorLogCapacity;
+    telnetMonitorLog[idx] = entry;
+    telnetMonitorLogCount++;
+    return;
+  }
+  telnetMonitorLog[telnetMonitorLogStart] = entry;
+  telnetMonitorLogStart = (telnetMonitorLogStart + 1) % kMonitorLogCapacity;
 }
 
 void clearMonitorLog() {
@@ -647,10 +668,12 @@ void handleConsoleCommand(const String &line) {
   if (!cmd.length()) return;
 
   if (cmd == "monitor on" || cmd == "telnet monitor on") {
+    telnetMonitorEnabled = true;
     printMonitorStatus();
     return;
   }
   if (cmd == "monitor off" || cmd == "telnet monitor off") {
+    telnetMonitorEnabled = false;
     printMonitorStatus();
     return;
   }
@@ -659,7 +682,10 @@ void handleConsoleCommand(const String &line) {
     return;
   }
   if (cmd == "monitor help" || cmd == "help") {
-    Serial.println("monitor logging is disabled in this build");
+    Serial.println("monitor commands:");
+    Serial.println("  monitor on");
+    Serial.println("  monitor off");
+    Serial.println("  monitor status");
     return;
   }
   Serial.print("monitor: unknown command: ");
@@ -2136,7 +2162,7 @@ void savePersistedDiagnostics() {
     t["wifi_rssi"] = trendHistory[idx].wifiRssi;
     t["telnet_clients_active"] = trendHistory[idx].telnetClients;
   }
-  doc["monitor_logging_enabled"] = false;
+  doc["monitor_logging_enabled"] = telnetMonitorEnabled;
 
   File f = SPIFFS.open(kDiagnosticsPath, FILE_WRITE);
   if (!f) {
@@ -3021,7 +3047,7 @@ void handleApiStatus() {
   }
   doc["ethernet_enabled"] = config.eth.enabled;
   doc["wifi_rssi"] = WiFi.isConnected() ? WiFi.RSSI() : 0;
-  doc["monitor_logging_enabled"] = false;
+  doc["monitor_logging_enabled"] = telnetMonitorEnabled;
   doc["time_synced"] = clockHasValidTime();
   doc["local_time"] = localTimeString();
   String out;
@@ -3069,7 +3095,7 @@ void handleApiMeta() {
   doc["max_dinplug_bindings_total"] = kMaxDinplugBindingsTotal;
   doc["dinplug_bindings_used"] = dinplugBindingCount;
   doc["dinplug_bindings_available"] = kMaxDinplugBindingsTotal - dinplugBindingCount;
-  doc["monitor_logging_enabled"] = false;
+  doc["monitor_logging_enabled"] = telnetMonitorEnabled;
   doc["max_temp_sensors"] = kMaxTempSensors;
   doc["max_emitters"] = kMaxEmitters;
   doc["max_hvacs"] = kMaxHvacs;
@@ -3329,7 +3355,7 @@ bool processCommand(JsonDocument &doc, JsonDocument &resp, int8_t sourceTelnetSl
     resp["trend_samples_count"] = trendHistoryCount;
     resp["trend_sample_interval_sec"] = (kTrendSampleIntervalMs / 1000UL);
     resp["wifi_rssi"] = WiFi.isConnected() ? WiFi.RSSI() : 0;
-    resp["monitor_logging_enabled"] = false;
+    resp["monitor_logging_enabled"] = telnetMonitorEnabled;
     resp["time_synced"] = clockHasValidTime();
     resp["local_time"] = localTimeString();
     return true;
@@ -3584,16 +3610,28 @@ void handleMonitorPage() {
 
 void handleApiMonitor() {
   if (!checkAuth()) { requestAuth(); return; }
+  uint16_t limit = kMonitorLogCapacity;
+  if (web.hasArg("limit")) {
+    long requested = web.arg("limit").toInt();
+    if (requested > 0) {
+      limit = (uint16_t)requested;
+      if (limit > kMonitorLogCapacity) limit = kMonitorLogCapacity;
+    }
+  }
+  if (limit > telnetMonitorLogCount) limit = telnetMonitorLogCount;
   JsonDocument doc;
-  doc["enabled"] = false;
-  doc["available"] = false;
-  doc["message"] = "Monitor logging is disabled in this build.";
+  doc["enabled"] = telnetMonitorEnabled;
   JsonObject filters = doc["filters"].to<JsonObject>();
-  filters["telnet"] = false;
-  filters["state"] = false;
-  filters["dinplug"] = false;
-  filters["ir"] = false;
-  doc["lines"].to<JsonArray>();
+  filters["telnet"] = monitorLogTelnetEnabled;
+  filters["state"] = monitorLogStateEnabled;
+  filters["dinplug"] = monitorLogDinplugEnabled;
+  filters["ir"] = monitorLogIrEnabled;
+  JsonArray lines = doc["lines"].to<JsonArray>();
+  uint16_t startOffset = telnetMonitorLogCount - limit;
+  for (uint16_t i = startOffset; i < telnetMonitorLogCount; i++) {
+    uint16_t idx = (telnetMonitorLogStart + i) % kMonitorLogCapacity;
+    lines.add(telnetMonitorLog[idx]);
+  }
   String out;
   serializeJson(doc, out);
   web.send(200, "application/json", out);
@@ -3629,17 +3667,38 @@ void handleMonitorClear() {
 
 void handleMonitorToggle() {
   if (!checkAuth()) { requestAuth(); return; }
+  String enabled = web.arg("enabled");
+  enabled.toLowerCase();
+  telnetMonitorEnabled = (enabled == "1" || enabled == "true" || enabled == "on");
+  if (web.hasArg("telnet")) {
+    String value = web.arg("telnet");
+    value.toLowerCase();
+    monitorLogTelnetEnabled = (value == "1" || value == "true" || value == "on");
+  }
+  if (web.hasArg("state")) {
+    String value = web.arg("state");
+    value.toLowerCase();
+    monitorLogStateEnabled = (value == "1" || value == "true" || value == "on");
+  }
+  if (web.hasArg("dinplug")) {
+    String value = web.arg("dinplug");
+    value.toLowerCase();
+    monitorLogDinplugEnabled = (value == "1" || value == "true" || value == "on");
+  }
+  if (web.hasArg("ir")) {
+    String value = web.arg("ir");
+    value.toLowerCase();
+    monitorLogIrEnabled = (value == "1" || value == "true" || value == "on");
+  }
   printMonitorStatus();
   JsonDocument doc;
   doc["ok"] = true;
-  doc["enabled"] = false;
-  doc["available"] = false;
-  doc["message"] = "Monitor logging is disabled in this build.";
+  doc["enabled"] = telnetMonitorEnabled;
   JsonObject filters = doc["filters"].to<JsonObject>();
-  filters["telnet"] = false;
-  filters["state"] = false;
-  filters["dinplug"] = false;
-  filters["ir"] = false;
+  filters["telnet"] = monitorLogTelnetEnabled;
+  filters["state"] = monitorLogStateEnabled;
+  filters["dinplug"] = monitorLogDinplugEnabled;
+  filters["ir"] = monitorLogIrEnabled;
   String out;
   serializeJson(doc, out);
   web.send(200, "application/json", out);
@@ -4520,7 +4579,7 @@ void setup() {
   sampleRuntimeTrends(true);
   savePersistedDiagnostics();
   printMonitorStatus();
-  Serial.println("monitor: disabled while runtime stability is under investigation");
+  Serial.println("monitor: use 'monitor on|off|status' via serial terminal");
 }
 
 void loop() {

@@ -62,7 +62,7 @@ Configurable in `/config`:
 
 Runtime behavior:
 - Captures are printed to Serial.
-- Captures are available through the learn flow and diagnostics tooling. Live monitor logging is currently disabled in this build while runtime stability is being investigated.
+- Captures are available through the learn flow and diagnostics tooling. Live monitor logging is enabled again, but the retained in-memory history is intentionally shorter to reduce memory churn.
 
 ## DS18B20 temperature sensors
 Configure DS18B20 in `/config`:
@@ -374,14 +374,12 @@ curl -X POST http://ir-server.local/api/config/save \
 ```
 
 ### Monitor API
-Live monitor logging is currently disabled in this build while runtime stability is being investigated.
+Live monitor logging is enabled again in this build, but the retained history is intentionally shorter.
 
-`GET /api/monitor` still exists for compatibility, but returns an unavailable/disabled response with no log lines.
+`GET /api/monitor` returns the current enabled state, category filters, and the most recent retained lines.
 
 Returned fields:
 - `enabled`
-- `available`
-- `message`
 - `filters.telnet`
 - `filters.state`
 - `filters.dinplug`
@@ -391,16 +389,16 @@ Returned fields:
 Example:
 ```json
 {
-  "enabled": false,
-  "available": false,
-  "message": "Monitor logging is disabled in this build.",
+  "enabled": true,
   "filters": {
-    "telnet": false,
-    "state": false,
-    "dinplug": false,
+    "telnet": true,
+    "state": true,
+    "dinplug": true,
     "ir": false
   },
-  "lines": []
+  "lines": [
+    "[2026-03-25 11:59:00] [123456 ms] wifi: reconnected ip=192.168.51.10"
+  ]
 }
 ```
 
@@ -414,7 +412,7 @@ Set monitor enabled state and category filters:
   - `ir=0|1`
 
 Current behavior:
-- returns `ok: true`, but monitor logging remains disabled in this build
+- returns `ok: true` and applies the requested enabled state and category filters
 
 Response:
 ```json
@@ -422,8 +420,8 @@ Response:
   "ok": true,
   "enabled": true,
   "filters": {
-    "telnet": false,
-    "state": false,
+    "telnet": true,
+    "state": true,
     "dinplug": false,
     "ir": false
   }
@@ -520,7 +518,7 @@ These are used by the web UI rather than third-party automation, but they are pa
 - `GET /api/device/get` and `GET /api/device/get_all` return the same state objects used by the telnet API.
 - `POST /api/device/send` and `POST /api/device/raw` reuse the same backend logic as telnet commands.
 - `POST /api/config/save` replaces the full config; it is not a partial patch endpoint.
-- `/api/monitor` is compatibility-only in this build and intentionally reports monitor logging as unavailable.
+- `/api/monitor` is read-only; use `/monitor/toggle` and `/monitor/clear` to manage monitor behavior.
 - The web UI in `/system#api` includes copyable examples and a read-only API tester for safe endpoints.
 
 ## Home Assistant
