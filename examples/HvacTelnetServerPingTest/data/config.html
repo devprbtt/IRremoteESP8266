@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Config - IR Server Ping Test</title>
+  <style>
+    body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0b1220;color:#e5eef8}
+    .wrap{max-width:720px;margin:0 auto;padding:24px 16px 96px}.card{background:#121b2d;border:1px solid #24314a;border-radius:16px;padding:16px;margin:0 0 16px}
+    label{display:block;margin:0 0 12px} input{width:100%;padding:12px;border-radius:10px;border:1px solid #24314a;background:#0f1726;color:#fff}
+    .row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.check{display:flex;align-items:center;gap:8px}.check input{width:auto}
+    button{width:100%;padding:12px;border:none;border-radius:10px;background:#2563eb;color:#fff;font-weight:700} p{color:#9fb0ca}
+    nav{position:fixed;left:0;right:0;bottom:0;background:#121b2d;border-top:1px solid #24314a;display:flex;justify-content:center;gap:8px;padding:12px}
+    nav a{color:#9fb0ca;text-decoration:none;padding:10px 14px;border-radius:10px} nav a.active{background:#1f3256;color:#fff}
+    @media(max-width:520px){.row{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Network Config</h1>
+      <p>Use this stripped-down page to test WiFi behavior without the rest of the HVAC stack.</p>
+    </div>
+    <form class="card" method="post" action="/config/save">
+      <label>Hostname<input id="hostname" name="hostname"></label>
+      <label>WiFi SSID<input id="ssid" name="ssid"></label>
+      <label>WiFi Password<input id="password" name="password" type="password"></label>
+      <label class="check"><input id="dhcp" name="dhcp" type="checkbox" value="1" checked>Use DHCP</label>
+      <div class="row">
+        <label>IP<input id="ip" name="ip"></label>
+        <label>Gateway<input id="gateway" name="gateway"></label>
+        <label>Subnet<input id="subnet" name="subnet"></label>
+        <label>DNS<input id="dns" name="dns"></label>
+      </div>
+      <button type="submit">Save and Reboot</button>
+    </form>
+  </div>
+  <nav>
+    <a href="/">Home</a>
+    <a class="active" href="/config">Config</a>
+    <a href="/system">System</a>
+  </nav>
+  <script>
+    const byId=id=>document.getElementById(id);
+    async function init(){
+      const [cfgRes, stRes] = await Promise.all([fetch('/api/config'), fetch('/api/status')]);
+      const cfg = await cfgRes.json();
+      const st = await stRes.json();
+      byId('hostname').value = cfg.hostname || '';
+      byId('ssid').value = cfg.wifi?.ssid || '';
+      byId('password').value = cfg.wifi?.password || '';
+      const dhcp = cfg.wifi?.dhcp !== false;
+      byId('dhcp').checked = dhcp;
+      byId('ip').value = dhcp ? (st.ip || '') : (cfg.wifi?.ip || '');
+      byId('gateway').value = dhcp ? (st.gateway || '') : (cfg.wifi?.gateway || '');
+      byId('subnet').value = dhcp ? (st.subnet || '') : (cfg.wifi?.subnet || '');
+      byId('dns').value = dhcp ? (st.dns || '') : (cfg.wifi?.dns || '');
+    }
+    init();
+  </script>
+</body>
+</html>

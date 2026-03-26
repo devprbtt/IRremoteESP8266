@@ -1,0 +1,31 @@
+#pragma once
+
+String networkListHtml();
+String pageHeader(const String &title);
+String pageFooter();
+bool streamSpiffsFile(const char *path, const char *contentType);
+void sendSpiffsFallbackPage(const String &title, const String &spiffsPath);
+void handleHome();
+void handleConfigPage();
+void handleConfigSave();
+void handleEmittersPage();
+void handleEmittersAdd();
+void handleEmittersDelete();
+void handleHvacsPage();
+void handleHvacsAdd();
+void handleHvacsClone();
+void handleHvacsUpdate();
+void handleHvacsDelete();
+void handleHvacTestPage();
+void handleConfigDownload();
+void handleConfigUploadPage();
+void handleConfigUpload();
+void handleConfigUploadDone();
+void handleApiConfig();
+void handleMonitorPage();
+bool isApPortalMode();
+String captivePortalUrl();
+void sendPortalRedirect();
+void handleCaptive204();
+void handleCaptiveRedirect();
+void setupWeb();

@@ -168,9 +168,15 @@ Returned fields include:
 - `filesystem_version`
 - `filesystem_version_expected`
 - `version_match`
+- `boot_count`
+- `reset_reason`
 - `network_mode`
 - `ip`
+- `gateway`
+- `subnet`
+- `dns`
 - `hostname`
+- `timezone`
 - `uptime_ms`
 - `telnet_port`
 - `dinplug_status`
@@ -190,14 +196,31 @@ Returned fields include:
 - `temp_sensor_precision`
 - `temp_sensors`
 - `ethernet_enabled`
+- `eth_begin_last_ok`
+- `eth_link_up`
+- `eth_local_ip`
+- `eth_gateway`
+- `eth_subnet`
+- `eth_dns`
+- `eth_runtime_ready`
+- `eth_last_begin_ms`
+- `eth_last_link_up_ms`
+- `wifi_mode_raw`
 - `wifi_rssi`
+- `monitor_logging_enabled`
+- `time_synced`
+- `local_time`
 
 Example:
 ```json
 {
-  "network_mode": "WiFi STA",
-  "ip": "192.168.51.10",
+  "network_mode": "ETH",
+  "ip": "192.168.51.229",
+  "gateway": "192.168.51.1",
+  "subnet": "255.255.255.0",
+  "dns": "8.8.8.8",
   "hostname": "ir-server",
+  "timezone": "-03:00",
   "uptime_ms": 123456,
   "telnet_port": 4998,
   "dinplug_status": "connected",
@@ -209,7 +232,13 @@ Example:
   "heap_min_free": 190120,
   "heap_max_alloc": 131060,
   "telnet_clients_active": 2,
-  "wifi_rssi": -58
+  "ethernet_enabled": true,
+  "eth_begin_last_ok": true,
+  "eth_link_up": true,
+  "eth_local_ip": "192.168.51.229",
+  "eth_runtime_ready": true,
+  "wifi_mode_raw": 0,
+  "wifi_rssi": 0
 }
 ```
 
@@ -572,7 +601,10 @@ LED follow notes:
 - Web OTA in `/system` shows upload progress and then auto-attempts reconnect to the main page after reboot.
 
 ## Networking behavior
-- If Ethernet is enabled, firmware tries Ethernet first; if link/IP fails, it falls back to WiFi/AP flow.
+- If Ethernet is enabled, firmware tries Ethernet first on boot; if link/IP fails, it falls back to WiFi/AP flow.
+- If the board is already running on WiFi and Ethernet later gets link/IP, Ethernet takes over automatically and WiFi is turned off.
+- If Ethernet is unplugged while active, the firmware falls back to WiFi STA automatically. If no WiFi SSID is configured, it falls back to setup AP mode.
+- mDNS is restarted when the active interface changes so the hostname follows the active path.
 - In AP mode, captive portal endpoints redirect clients automatically to the web UI.
 - After saving config that triggers reboot, the web page auto-attempts reconnection.
 

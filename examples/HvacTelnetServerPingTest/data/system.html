@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>System - IR Server Ping Test</title>
+  <style>
+    body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0b1220;color:#e5eef8}
+    .wrap{max-width:720px;margin:0 auto;padding:24px 16px 96px}.card{background:#121b2d;border:1px solid #24314a;border-radius:16px;padding:16px;margin:0 0 16px}
+    input{width:100%;padding:12px;border-radius:10px;border:1px solid #24314a;background:#0f1726;color:#fff}
+    button{width:100%;padding:12px;border:none;border-radius:10px;background:#2563eb;color:#fff;font-weight:700;margin-top:10px}
+    .warn{background:#3b2608}.status{margin-top:10px;color:#9fb0ca;white-space:pre-wrap}
+    nav{position:fixed;left:0;right:0;bottom:0;background:#121b2d;border-top:1px solid #24314a;display:flex;justify-content:center;gap:8px;padding:12px}
+    nav a{color:#9fb0ca;text-decoration:none;padding:10px 14px;border-radius:10px} nav a.active{background:#1f3256;color:#fff}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card"><h1>System</h1><p>Minimal OTA page for firmware and SPIFFS comparison testing.</p></div>
+    <div class="card">
+      <h2>Firmware OTA</h2>
+      <input id="fw" type="file" accept=".bin,application/octet-stream">
+      <button id="fw_btn" type="button">Upload Firmware</button>
+      <div class="status" id="fw_status">Ready</div>
+    </div>
+    <div class="card warn">
+      <h2>SPIFFS OTA</h2>
+      <input id="fs" type="file" accept=".bin,application/octet-stream">
+      <button id="fs_btn" type="button">Upload SPIFFS</button>
+      <div class="status" id="fs_status">Ready</div>
+    </div>
+  </div>
+  <nav>
+    <a href="/">Home</a>
+    <a href="/config">Config</a>
+    <a class="active" href="/system">System</a>
+  </nav>
+  <script>
+    function upload(fileId, statusId, url){
+      const file=document.getElementById(fileId).files[0];
+      const status=document.getElementById(statusId);
+      if(!file){status.textContent='Select a file first.';return;}
+      const form=new FormData();
+      form.append('update', file);
+      status.textContent='Uploading...';
+      fetch(url,{method:'POST',body:form}).then(r=>r.text()).then(t=>status.textContent=t).catch(e=>status.textContent='Upload failed: '+e);
+    }
+    document.getElementById('fw_btn').addEventListener('click',()=>upload('fw','fw_status','/firmware/update'));
+    document.getElementById('fs_btn').addEventListener('click',()=>upload('fs','fs_status','/spiffs/update'));
+  </script>
+</body>
+</html>
